@@ -364,26 +364,30 @@ class LoadALARMData(object):
                 # Set to graduated colors
                 sym.updateRenderer('GraduatedColorsRenderer')
                 sym.renderer.classificationField = "max_ppr"
-                sym.renderer.classificationMethod = "Manual"
                 sym.renderer.breakCount = 5
                 
-                # Define breaks and colors (magenta/pink gradient)
-                breaks = [0, 25, 50, 100, 200, 10000]
+                # First compute with EqualInterval to initialize breaks
+                sym.renderer.classificationMethod = "EqualInterval"
+                
+                # Now switch to Manual and set our custom breaks
+                sym.renderer.classificationMethod = "Manual"
+                
+                # Define breaks (upper bounds) and colors (magenta/pink gradient)
+                breaks = [25, 50, 100, 200, 10000]
                 colors = [
-                    {'RGB': [255, 179, 217, 100]},  # #ffb3d9
-                    {'RGB': [255, 102, 179, 100]},  # #ff66b3
-                    {'RGB': [255, 0, 128, 100]},    # #ff0080
-                    {'RGB': [204, 0, 102, 100]},    # #cc0066
-                    {'RGB': [153, 0, 80, 100]}      # #990050
+                    {'RGB': [255, 179, 217, 100]},  # #ffb3d9 - light pink (0-25)
+                    {'RGB': [255, 102, 179, 100]},  # #ff66b3 - pink (25-50)
+                    {'RGB': [255, 0, 128, 100]},    # #ff0080 - magenta (50-100)
+                    {'RGB': [204, 0, 102, 100]},    # #cc0066 - dark magenta (100-200)
+                    {'RGB': [153, 0, 80, 100]}      # #990050 - very dark magenta (>200)
                 ]
                 
-                # Set breaks
-                sym.renderer.classBreaks = breaks
-                
-                # Set colors for each class
-                for i, color in enumerate(colors):
-                    if i < len(sym.renderer.classBreaks) - 1:
-                        sym.renderer.classBreaks[i].symbol.color = color
+                # Apply breaks and colors to each class
+                for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
+                    sym.renderer.classBreaks[i].upperBound = breaks[i]
+                    if i < len(colors):
+                        sym.renderer.classBreaks[i].symbol.color = colors[i]
+                        sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
                 
                 layer.symbology = sym
                 layer.transparency = 0
@@ -653,26 +657,30 @@ class ApplySymbology(object):
             sym = layer.symbology
             sym.updateRenderer('GraduatedColorsRenderer')
             sym.renderer.classificationField = "max_ppr"
-            sym.renderer.classificationMethod = "Manual"
             sym.renderer.breakCount = 5
             
-            # Define breaks and colors
-            breaks = [0, 25, 50, 100, 200, 10000]
+            # First compute with EqualInterval to initialize breaks
+            sym.renderer.classificationMethod = "EqualInterval"
+            
+            # Now switch to Manual and set our custom breaks
+            sym.renderer.classificationMethod = "Manual"
+            
+            # Define breaks (upper bounds) and colors
+            breaks = [25, 50, 100, 200, 10000]
             colors = [
-                {'RGB': [255, 179, 217, 100]},  # #ffb3d9
-                {'RGB': [255, 102, 179, 100]},  # #ff66b3
-                {'RGB': [255, 0, 128, 100]},    # #ff0080
-                {'RGB': [204, 0, 102, 100]},    # #cc0066
-                {'RGB': [153, 0, 80, 100]}      # #990050
+                {'RGB': [255, 179, 217, 100]},  # #ffb3d9 - light pink (0-25)
+                {'RGB': [255, 102, 179, 100]},  # #ff66b3 - pink (25-50)
+                {'RGB': [255, 0, 128, 100]},    # #ff0080 - magenta (50-100)
+                {'RGB': [204, 0, 102, 100]},    # #cc0066 - dark magenta (100-200)
+                {'RGB': [153, 0, 80, 100]}      # #990050 - very dark magenta (>200)
             ]
             
-            # Set breaks
-            sym.renderer.classBreaks = breaks
-            
-            # Set colors
-            for i, color in enumerate(colors):
-                if i < len(sym.renderer.classBreaks) - 1:
-                    sym.renderer.classBreaks[i].symbol.color = color
+            # Apply breaks and colors
+            for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
+                sym.renderer.classBreaks[i].upperBound = breaks[i]
+                if i < len(colors):
+                    sym.renderer.classBreaks[i].symbol.color = colors[i]
+                    sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
             
             layer.symbology = sym
             layer.transparency = 0
