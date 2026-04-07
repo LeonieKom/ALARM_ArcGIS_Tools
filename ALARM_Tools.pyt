@@ -205,7 +205,7 @@ class LoadALARMData(object):
             arcpy.AddMessage(f"Organizing layers in group: {group_name}")
             try:
                 # Create group layer
-                group_layer = map_obj.addGroup(group_name)
+                group_layer = map_obj.createGroupLayer(group_name)
                 
                 # Move layers to group (in reverse order to maintain order)
                 for lyr in reversed(layers_added):
