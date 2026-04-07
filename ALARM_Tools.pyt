@@ -254,17 +254,30 @@ class LoadALARMData(object):
         try:
             sym = layer.symbology
             if hasattr(sym, 'colorizer'):
-                # Set to classified colorizer
-                sym.colorizer.classificationMethod = "Manual"
+                # Update to classified colorizer
+                if sym.colorizer.type != 'RasterClassifyColorizer':
+                    sym.updateColorizer('RasterClassifyColorizer')
                 
-                # Define breaks and colors (from QML)
+                # Set classification method to manual
+                sym.colorizer.classificationMethod = 'Manual'
+                sym.colorizer.breakCount = 4
+                
+                # Define breaks and colors
                 breaks = [1, 10, 25, 50, 1000]
                 colors = [
-                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa
-                    {'RGB': [117, 193, 101, 100]},  # #75c165
-                    {'RGB': [169, 108, 0, 100]},    # #a96c00
-                    {'RGB': [139, 0, 105, 100]}     # #8b0069
+                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue
+                    {'RGB': [117, 193, 101, 100]},  # #75c165 - green
+                    {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange
+                    {'RGB': [139, 0, 105, 100]}     # #8b0069 - purple
                 ]
+                
+                # Set class breaks
+                sym.colorizer.classBreaks = breaks
+                
+                # Set colors for each class
+                for i, color in enumerate(colors):
+                    if i < len(sym.colorizer.classBreaks) - 1:
+                        sym.colorizer.classBreaks[i].color = color
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -530,9 +543,35 @@ class ApplySymbology(object):
         """Apply PPR symbology."""
         try:
             sym = layer.symbology
-            sym.colorizer.classificationMethod = "Manual"
-            layer.symbology = sym
-            layer.transparency = 30
+            if hasattr(sym, 'colorizer'):
+                # Update to classified colorizer
+                if sym.colorizer.type != 'RasterClassifyColorizer':
+                    sym.updateColorizer('RasterClassifyColorizer')
+                
+                # Set classification method to manual
+                sym.colorizer.classificationMethod = 'Manual'
+                sym.colorizer.breakCount = 4
+                
+                # Define breaks and colors
+                breaks = [1, 10, 25, 50, 1000]
+                colors = [
+                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue
+                    {'RGB': [117, 193, 101, 100]},  # #75c165 - green
+                    {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange
+                    {'RGB': [139, 0, 105, 100]}     # #8b0069 - purple
+                ]
+                
+                # Set class breaks
+                sym.colorizer.classBreaks = breaks
+                
+                # Set colors for each class
+                for i, color in enumerate(colors):
+                    if i < len(sym.colorizer.classBreaks) - 1:
+                        sym.colorizer.classBreaks[i].color = color
+                
+                layer.symbology = sym
+                layer.transparency = 30
+            
             arcpy.AddMessage("Applied PPR symbology (70% opacity)")
         except Exception as e:
             arcpy.AddError(f"Error: {e}")
