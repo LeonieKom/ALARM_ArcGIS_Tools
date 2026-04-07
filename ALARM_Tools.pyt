@@ -295,30 +295,32 @@ class LoadALARMData(object):
                 # Set to graduated colors
                 sym.updateRenderer('GraduatedColorsRenderer')
                 sym.renderer.classificationField = "med_pres"
+                sym.renderer.breakCount = 5
                 
-                # IMPORTANT: Set to Manual AFTER setting breaks
-                # Define breaks (0 to >500 kPa)
-                breaks = [0, 50, 100, 200, 500]
-                sym.renderer.breakCount = len(breaks)
+                # First compute with EqualInterval to initialize breaks
+                sym.renderer.classificationMethod = "EqualInterval"
                 
-                # Set classification method to Manual
+                # Now switch to Manual and set our custom breaks
                 sym.renderer.classificationMethod = "Manual"
+                
+                # Define breaks (0 to >500 kPa) - these are upper bounds
+                breaks = [50, 100, 200, 500, 10000]
                 
                 # Define colors
                 colors = [
-                    {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
-                    {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
-                    {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue
-                    {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue
-                    {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
+                    {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue (0-50)
+                    {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue (50-100)
+                    {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue (100-200)
+                    {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue (200-500)
+                    {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
                 ]
                 
                 # Apply breaks and colors to each class
-                for i in range(len(breaks)):
-                    if i < len(sym.renderer.classBreaks):
-                        sym.renderer.classBreaks[i].upperBound = breaks[i]
-                        if i < len(colors):
-                            sym.renderer.classBreaks[i].symbol.color = colors[i]
+                for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
+                    sym.renderer.classBreaks[i].upperBound = breaks[i]
+                    if i < len(colors):
+                        sym.renderer.classBreaks[i].symbol.color = colors[i]
+                        sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -586,29 +588,32 @@ class ApplySymbology(object):
             sym = layer.symbology
             sym.updateRenderer('GraduatedColorsRenderer')
             sym.renderer.classificationField = "med_pres"
+            sym.renderer.breakCount = 5
             
-            # Define breaks (0 to >500 kPa)
-            breaks = [0, 50, 100, 200, 500]
-            sym.renderer.breakCount = len(breaks)
+            # First compute with EqualInterval to initialize breaks
+            sym.renderer.classificationMethod = "EqualInterval"
             
-            # Set classification method to Manual
+            # Now switch to Manual and set our custom breaks
             sym.renderer.classificationMethod = "Manual"
+            
+            # Define breaks (0 to >500 kPa) - these are upper bounds
+            breaks = [50, 100, 200, 500, 10000]
             
             # Define colors
             colors = [
-                {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
-                {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
-                {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue
-                {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue
-                {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
+                {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue (0-50)
+                {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue (50-100)
+                {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue (100-200)
+                {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue (200-500)
+                {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
             ]
             
             # Apply breaks and colors
-            for i in range(len(breaks)):
-                if i < len(sym.renderer.classBreaks):
-                    sym.renderer.classBreaks[i].upperBound = breaks[i]
-                    if i < len(colors):
-                        sym.renderer.classBreaks[i].symbol.color = colors[i]
+            for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
+                sym.renderer.classBreaks[i].upperBound = breaks[i]
+                if i < len(colors):
+                    sym.renderer.classBreaks[i].symbol.color = colors[i]
+                    sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
             
             layer.symbology = sym
             layer.transparency = 10
