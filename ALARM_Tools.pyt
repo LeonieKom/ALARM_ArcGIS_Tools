@@ -207,9 +207,9 @@ class LoadALARMData(object):
                 # Create group layer
                 group_layer = map_obj.createGroupLayer(group_name)
                 
-                # Move layers to group (in reverse order to maintain order)
-                for lyr in reversed(layers_added):
-                    map_obj.moveLayer(group_layer, lyr, "BOTTOM")
+                # Move layers to group
+                for lyr in layers_added:
+                    map_obj.moveLayer(group_layer, lyr, "AFTER")
                     
                 arcpy.AddMessage(f"Created group layer: {group_name}")
             except Exception as e:
@@ -295,11 +295,16 @@ class LoadALARMData(object):
                 # Set to graduated colors
                 sym.updateRenderer('GraduatedColorsRenderer')
                 sym.renderer.classificationField = "med_pres"
-                sym.renderer.classificationMethod = "Manual"
-                sym.renderer.breakCount = 5
                 
+                # IMPORTANT: Set to Manual AFTER setting breaks
                 # Define breaks (0 to >500 kPa)
-                breaks = [0, 50, 100, 200, 500, 10000]
+                breaks = [0, 50, 100, 200, 500]
+                sym.renderer.breakCount = len(breaks)
+                
+                # Set classification method to Manual
+                sym.renderer.classificationMethod = "Manual"
+                
+                # Define colors
                 colors = [
                     {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
                     {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
@@ -308,13 +313,12 @@ class LoadALARMData(object):
                     {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
                 ]
                 
-                # Set breaks
-                sym.renderer.classBreaks = breaks
-                
-                # Set colors for each class
-                for i, color in enumerate(colors):
-                    if i < len(sym.renderer.classBreaks) - 1:
-                        sym.renderer.classBreaks[i].symbol.color = color
+                # Apply breaks and colors to each class
+                for i in range(len(breaks)):
+                    if i < len(sym.renderer.classBreaks):
+                        sym.renderer.classBreaks[i].upperBound = breaks[i]
+                        if i < len(colors):
+                            sym.renderer.classBreaks[i].symbol.color = colors[i]
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -582,11 +586,15 @@ class ApplySymbology(object):
             sym = layer.symbology
             sym.updateRenderer('GraduatedColorsRenderer')
             sym.renderer.classificationField = "med_pres"
-            sym.renderer.classificationMethod = "Manual"
-            sym.renderer.breakCount = 5
             
-            # Define breaks (0 to >500 kPa) with blue gradient
-            breaks = [0, 50, 100, 200, 500, 10000]
+            # Define breaks (0 to >500 kPa)
+            breaks = [0, 50, 100, 200, 500]
+            sym.renderer.breakCount = len(breaks)
+            
+            # Set classification method to Manual
+            sym.renderer.classificationMethod = "Manual"
+            
+            # Define colors
             colors = [
                 {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
                 {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
@@ -595,13 +603,12 @@ class ApplySymbology(object):
                 {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
             ]
             
-            # Set breaks
-            sym.renderer.classBreaks = breaks
-            
-            # Set colors
-            for i, color in enumerate(colors):
-                if i < len(sym.renderer.classBreaks) - 1:
-                    sym.renderer.classBreaks[i].symbol.color = color
+            # Apply breaks and colors
+            for i in range(len(breaks)):
+                if i < len(sym.renderer.classBreaks):
+                    sym.renderer.classBreaks[i].upperBound = breaks[i]
+                    if i < len(colors):
+                        sym.renderer.classBreaks[i].symbol.color = colors[i]
             
             layer.symbology = sym
             layer.transparency = 10
