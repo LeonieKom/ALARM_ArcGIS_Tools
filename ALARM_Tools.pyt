@@ -209,9 +209,13 @@ class LoadALARMData(object):
                 # Create group layer
                 group_layer = map_obj.createGroupLayer(group_name)
                 
-                # Move layers to group
+                # Add layers to group (this creates copies in the group)
                 for lyr in layers_added:
-                    map_obj.moveLayer(group_layer, lyr, "AFTER")
+                    map_obj.addLayerToGroup(group_layer, lyr)
+                
+                # Remove original layers (they're now in the group)
+                for lyr in layers_added:
+                    map_obj.removeLayer(lyr)
                     
                 arcpy.AddMessage(f"Created group layer: {group_name}")
             except Exception as e:
