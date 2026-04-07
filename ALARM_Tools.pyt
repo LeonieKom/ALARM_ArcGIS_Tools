@@ -121,10 +121,12 @@ class LoadALARMData(object):
         region = parameters[0].valueAsText
         scenario_full = parameters[1].valueAsText
         scenario_id = scenario_full.split(' - ')[0]  # Extract 'A' from 'A - (80-60, prox0, rel1.2m)'
-        data_types = parameters[2].valueAsText.split(';')
+        # Strip quotes and whitespace from data types
+        data_types = [dt.strip().strip("'\"") for dt in parameters[2].valueAsText.split(';')]
         use_group = parameters[3].value
         
         arcpy.AddMessage(f"Loading data for {region}, Scenario {scenario_id}")
+        arcpy.AddMessage(f"Data types to load: {data_types}")
         
         # Find scenario directory
         scenario_dir = self._find_scenario_dir(region, scenario_id)
