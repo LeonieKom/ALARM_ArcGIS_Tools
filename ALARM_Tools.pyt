@@ -266,7 +266,7 @@ class LoadALARMData(object):
                 
                 # Set classification field and break count
                 sym.colorizer.classificationField = "Value"
-                sym.colorizer.breakCount = 4
+                sym.colorizer.breakCount = 5
                 
                 # First use EqualInterval to initialize breaks
                 sym.colorizer.classificationMethod = 'EqualInterval'
@@ -275,12 +275,13 @@ class LoadALARMData(object):
                 sym.colorizer.classificationMethod = 'ManualInterval'
                 
                 # Define breaks (upper bounds) and colors
-                breaks = [1, 10, 25, 50]
+                breaks = [0.1, 1, 10, 25, 50]
                 colors = [
-                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0-1)
+                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
                     {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
                     {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
-                    {'RGB': [139, 0, 105, 100]}     # #8b0069 - purple (25-50)
+                    {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
+                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
                 ]
                 
                 # Set breaks and colors for each class
@@ -288,7 +289,10 @@ class LoadALARMData(object):
                     sym.colorizer.classBreaks[i].upperBound = breaks[i]
                     if i < len(colors):
                         sym.colorizer.classBreaks[i].color = colors[i]
-                        sym.colorizer.classBreaks[i].label = f"≤ {breaks[i]} kPa"
+                        if i == 0:
+                            sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                        else:
+                            sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -571,7 +575,7 @@ class ApplySymbology(object):
                 
                 # Set classification field and break count
                 sym.colorizer.classificationField = "Value"
-                sym.colorizer.breakCount = 4
+                sym.colorizer.breakCount = 5
                 
                 # First use EqualInterval to initialize breaks
                 sym.colorizer.classificationMethod = 'EqualInterval'
@@ -580,12 +584,13 @@ class ApplySymbology(object):
                 sym.colorizer.classificationMethod = 'ManualInterval'
                 
                 # Define breaks (upper bounds) and colors
-                breaks = [1, 10, 25, 50]
+                breaks = [0.1, 1, 10, 25, 50]
                 colors = [
-                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0-1)
+                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
                     {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
                     {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
-                    {'RGB': [139, 0, 105, 100]}     # #8b0069 - purple (25-50)
+                    {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
+                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
                 ]
                 
                 # Set breaks and colors for each class
@@ -593,7 +598,10 @@ class ApplySymbology(object):
                     sym.colorizer.classBreaks[i].upperBound = breaks[i]
                     if i < len(colors):
                         sym.colorizer.classBreaks[i].color = colors[i]
-                        sym.colorizer.classBreaks[i].label = f"≤ {breaks[i]} kPa"
+                        if i == 0:
+                            sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                        else:
+                            sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
                 layer.symbology = sym
                 layer.transparency = 30
