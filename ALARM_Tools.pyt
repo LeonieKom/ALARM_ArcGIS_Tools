@@ -203,11 +203,15 @@ class LoadALARMData(object):
         if use_group and layers_added:
             group_name = f"{region} - Scenario {scenario_id}"
             arcpy.AddMessage(f"Organizing layers in group: {group_name}")
-            # Create group by moving layers
             try:
-                # In ArcGIS Pro, we need to use the map's methods
-                # This is a simplified approach - actual implementation may vary
-                pass
+                # Create group layer
+                group_layer = map_obj.addGroup(group_name)
+                
+                # Move layers to group (in reverse order to maintain order)
+                for lyr in reversed(layers_added):
+                    map_obj.moveLayer(group_layer, lyr, "BOTTOM")
+                    
+                arcpy.AddMessage(f"Created group layer: {group_name}")
             except Exception as e:
                 arcpy.AddWarning(f"Could not create group layer: {e}")
         
@@ -281,8 +285,23 @@ class LoadALARMData(object):
                 sym.renderer.classificationMethod = "Manual"
                 sym.renderer.breakCount = 5
                 
-                # Define breaks (logarithmic)
-                breaks = [25, 50, 100, 200, 400, 10000]
+                # Define breaks (0 to >500 kPa)
+                breaks = [0, 50, 100, 200, 500, 10000]
+                colors = [
+                    {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
+                    {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
+                    {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue
+                    {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue
+                    {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
+                ]
+                
+                # Set breaks
+                sym.renderer.classBreaks = breaks
+                
+                # Set colors for each class
+                for i, color in enumerate(colors):
+                    if i < len(sym.renderer.classBreaks) - 1:
+                        sym.renderer.classBreaks[i].symbol.color = color
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -322,8 +341,23 @@ class LoadALARMData(object):
                 sym.renderer.classificationMethod = "Manual"
                 sym.renderer.breakCount = 5
                 
-                # Define breaks
+                # Define breaks and colors (magenta/pink gradient)
                 breaks = [0, 25, 50, 100, 200, 10000]
+                colors = [
+                    {'RGB': [255, 179, 217, 100]},  # #ffb3d9
+                    {'RGB': [255, 102, 179, 100]},  # #ff66b3
+                    {'RGB': [255, 0, 128, 100]},    # #ff0080
+                    {'RGB': [204, 0, 102, 100]},    # #cc0066
+                    {'RGB': [153, 0, 80, 100]}      # #990050
+                ]
+                
+                # Set breaks
+                sym.renderer.classBreaks = breaks
+                
+                # Set colors for each class
+                for i, color in enumerate(colors):
+                    if i < len(sym.renderer.classBreaks) - 1:
+                        sym.renderer.classBreaks[i].symbol.color = color
                 
                 layer.symbology = sym
                 layer.transparency = 0
@@ -412,7 +446,7 @@ class UpdateOverview(object):
                         arcpy.AddWarning(line)
             
             if result.returncode == 0:
-                arcpy.AddMessage("✓ Overview updated successfully!")
+                arcpy.AddMessage("Overview updated successfully!")
                 arcpy.AddMessage(f"Open: {output_dir}\\index.html")
             else:
                 arcpy.AddError(f"Script failed with return code {result.returncode}")
@@ -488,7 +522,7 @@ class ApplySymbology(object):
         elif symbology_type == "Risk Assessment":
             self._apply_risk_symbology(layer)
         
-        arcpy.AddMessage("✓ Symbology applied successfully!")
+        arcpy.AddMessage("Symbology applied successfully!")
         
         return
 
@@ -509,9 +543,30 @@ class ApplySymbology(object):
             sym = layer.symbology
             sym.updateRenderer('GraduatedColorsRenderer')
             sym.renderer.classificationField = "med_pres"
+            sym.renderer.classificationMethod = "Manual"
+            sym.renderer.breakCount = 5
+            
+            # Define breaks (0 to >500 kPa) with blue gradient
+            breaks = [0, 50, 100, 200, 500, 10000]
+            colors = [
+                {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue
+                {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue
+                {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue
+                {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue
+                {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue
+            ]
+            
+            # Set breaks
+            sym.renderer.classBreaks = breaks
+            
+            # Set colors
+            for i, color in enumerate(colors):
+                if i < len(sym.renderer.classBreaks) - 1:
+                    sym.renderer.classBreaks[i].symbol.color = color
+            
             layer.symbology = sym
             layer.transparency = 10
-            arcpy.AddMessage("Applied tracks symbology (90% opacity, logarithmic scale)")
+            arcpy.AddMessage("Applied tracks symbology (90% opacity, blue gradient 0-500+ kPa)")
         except Exception as e:
             arcpy.AddError(f"Error: {e}")
 
@@ -535,6 +590,27 @@ class ApplySymbology(object):
             sym = layer.symbology
             sym.updateRenderer('GraduatedColorsRenderer')
             sym.renderer.classificationField = "max_ppr"
+            sym.renderer.classificationMethod = "Manual"
+            sym.renderer.breakCount = 5
+            
+            # Define breaks and colors
+            breaks = [0, 25, 50, 100, 200, 10000]
+            colors = [
+                {'RGB': [255, 179, 217, 100]},  # #ffb3d9
+                {'RGB': [255, 102, 179, 100]},  # #ff66b3
+                {'RGB': [255, 0, 128, 100]},    # #ff0080
+                {'RGB': [204, 0, 102, 100]},    # #cc0066
+                {'RGB': [153, 0, 80, 100]}      # #990050
+            ]
+            
+            # Set breaks
+            sym.renderer.classBreaks = breaks
+            
+            # Set colors
+            for i, color in enumerate(colors):
+                if i < len(sym.renderer.classBreaks) - 1:
+                    sym.renderer.classBreaks[i].symbol.color = color
+            
             layer.symbology = sym
             layer.transparency = 0
             arcpy.AddMessage("Applied risk assessment symbology (magenta/pink scale, 100% opacity)")

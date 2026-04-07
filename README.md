@@ -2,16 +2,16 @@
 
 ArcGIS Pro Python Toolbox for working with ALARM (Avalanche Risk Assessment) pipeline results.
 
-## 🎯 Overview
+## Overview
 
 This toolbox provides easy access to ALARM pipeline outputs directly within ArcGIS Pro, with automatic symbology application and data management tools.
 
 **Features:**
-- 🗺️ **Load ALARM Data**: Load region/scenario data with automatic symbology
-- 🔄 **Update Overview**: Regenerate HTML overview page
-- 🎨 **Apply Symbology**: Apply standard ALARM symbology to selected layers
+- **Load ALARM Data**: Load region/scenario data with automatic symbology
+- **Update Overview**: Regenerate HTML overview page
+- **Apply Symbology**: Apply standard ALARM symbology to selected layers
 
-## 📦 Installation
+## Installation
 
 ### Method 1: Direct Download (Recommended)
 
@@ -35,7 +35,7 @@ For permanent access:
 1. Right-click on the added toolbox
 2. Select **Add To Favorites**
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Load ALARM Data
 
@@ -92,7 +92,7 @@ Applies standard ALARM symbology to selected layers in the current map.
 - Applies predefined symbology
 - Updates layer in current map
 
-## 🎨 Symbology Reference
+## Symbology Reference
 
 ### PPR Raster (Peak Pressure)
 - **≤ 1 kPa**: Transparent
@@ -127,7 +127,7 @@ Applies standard ALARM symbology to selected layers in the current map.
   - **> 200 kPa**: #990050
 - **Opacity**: 100%
 
-## 📁 Data Structure
+## Data Structure
 
 Expected data location: `L:\ALARM\Results\`
 
@@ -152,7 +152,7 @@ L:\ALARM\Results\
 └── ...
 ```
 
-## 🔧 Configuration
+## Configuration
 
 The toolbox uses these default paths:
 - **Results Base**: `L:\ALARM\Results`
@@ -166,7 +166,7 @@ self.results_base = Path(r"L:\ALARM\Results")
 self.overview_output = Path(r"L:\ALARM\ALARM_Overview")
 ```
 
-## 📊 Scenarios
+## Scenarios
 
 The ALARM pipeline processes 5 scenarios per region:
 
@@ -178,7 +178,7 @@ The ALARM pipeline processes 5 scenarios per region:
 | D | 75-55_prox0_rel2.3m | Medium thresholds, no proximity, 2.3m release |
 | E | 75-55_prox150_rel2.3m | Medium thresholds, 150m proximity, 2.3m release |
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### "No regions found"
 - Check that `L:\ALARM\Results` exists and contains region folders
@@ -195,31 +195,31 @@ The ALARM pipeline processes 5 scenarios per region:
 - Verify field names exist in the attribute table
 - Try manually applying symbology from Layer Properties
 
-## 📝 Requirements
+## Requirements
 
 - **ArcGIS Pro** 2.8 or later
 - **Python** 3.7+ (included with ArcGIS Pro)
 - **Network access** to `L:\ALARM\Results`
 
-## 🤝 Contributing
+## Contributing
 
 This is an open-source tool developed for the ALARM project. Contributions are welcome!
 
-## 📄 License
+## License
 
 MIT License - See LICENSE file for details
 
-## 👥 Authors
+## Authors
 
 - ALARM Project Team
 - Norwegian Water Resources and Energy Directorate (NVE)
 
-## 🔗 Related Projects
+## Related Projects
 
 - **ALARM Pipeline**: Main processing pipeline (private repository)
 - **AvaFrame**: Avalanche simulation framework
 
-## 📧 Support
+## Support
 
 For questions or issues:
 - Open an issue on GitHub
