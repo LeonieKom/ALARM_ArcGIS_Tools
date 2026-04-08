@@ -417,6 +417,10 @@ class LoadALARMData(object):
                 sym.colorizer.classificationField = "Value"
                 sym.colorizer.breakCount = 5
                 
+                # Exclude background values (0 and NoData)
+                sym.colorizer.exclusionRanges = [[0, 0.099]]
+                sym.colorizer.showClassGaps = False
+                
                 # First use EqualInterval to initialize breaks
                 sym.colorizer.classificationMethod = 'EqualInterval'
                 
@@ -442,9 +446,6 @@ class LoadALARMData(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
-                
-                # Set lower bound to exclude values below 0.1 (AFTER setting breaks)
-                sym.colorizer.classBreaks[0].lowerBound = 0.1
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -732,6 +733,10 @@ class ApplySymbology(object):
                 sym.colorizer.classificationField = "Value"
                 sym.colorizer.breakCount = 5
                 
+                # Exclude background values (0 and NoData)
+                sym.colorizer.exclusionRanges = [[0, 0.099]]
+                sym.colorizer.showClassGaps = False
+                
                 # First use EqualInterval to initialize breaks
                 sym.colorizer.classificationMethod = 'EqualInterval'
                 
@@ -757,9 +762,6 @@ class ApplySymbology(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
-                
-                # Set lower bound to exclude values below 0.1 (AFTER setting breaks)
-                sym.colorizer.classBreaks[0].lowerBound = 0.1
                 
                 layer.symbology = sym
                 layer.transparency = 30
