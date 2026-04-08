@@ -421,13 +421,13 @@ class LoadALARMData(object):
                 sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
-                breaks = [1, 10, 25, 50, 200]
+                breaks = [1, 10, 25, 50, 99999]
                 colors = [
                     {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
                     {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
                     {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
                     {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
-                    {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
+                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
                 ]
                 
                 # Apply breaks and colors
@@ -436,6 +436,8 @@ class LoadALARMData(object):
                     sym.colorizer.classBreaks[i].color = colors[i]
                     if i == 0:
                         sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                    elif i == len(breaks) - 1:
+                        sym.colorizer.classBreaks[i].label = f"> {breaks[i-1]} kPa"
                     else:
                         sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
@@ -729,13 +731,13 @@ class ApplySymbology(object):
                 sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
-                breaks = [1, 10, 25, 50, 200]
+                breaks = [1, 10, 25, 50, 99999]
                 colors = [
                     {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
                     {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
                     {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
                     {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
-                    {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
+                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
                 ]
                 
                 # Apply breaks and colors
@@ -744,6 +746,8 @@ class ApplySymbology(object):
                     sym.colorizer.classBreaks[i].color = colors[i]
                     if i == 0:
                         sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                    elif i == len(breaks) - 1:
+                        sym.colorizer.classBreaks[i].label = f"> {breaks[i-1]} kPa"
                     else:
                         sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
