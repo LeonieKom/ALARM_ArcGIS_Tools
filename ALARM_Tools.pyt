@@ -409,43 +409,47 @@ class LoadALARMData(object):
         try:
             sym = layer.symbology
             if hasattr(sym, 'colorizer'):
-                # Update to classified colorizer
+                # Step 1: Switch to RasterClassifyColorizer if needed
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # Set break count first
+                # Step 2: Set classification field and break count
+                sym.colorizer.classificationField = "Value"
                 sym.colorizer.breakCount = 5
+                sym.colorizer.noDataColor = {'RGB': [0, 0, 0, 0]}
                 
-                # Use EqualInterval to initialize, then switch to Manual
-                sym.colorizer.classificationMethod = 'EqualInterval'
-                sym.colorizer.classificationMethod = 'Manual'
-                
-                # Define breaks (upper bounds) and colors
+                # Step 3: Define custom breaks, colors and labels
                 breaks = [1, 10, 25, 50, 99999]
                 colors = [
-                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
-                    {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
-                    {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
-                    {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
-                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
+                    {'HSV': [186, 30, 98, 100]},   # light blue (0.1-1)
+                    {'HSV': [107, 49, 76, 100]},   # green (1-10)
+                    {'HSV': [28, 100, 66, 100]},    # orange (10-25)
+                    {'HSV': [310, 100, 55, 100]},   # purple (25-50)
+                    {'HSV': [320, 100, 39, 100]}    # darker purple (>50)
+                ]
+                labels = [
+                    "0.1 - 1 kPa",
+                    "1 - 10 kPa",
+                    "10 - 25 kPa",
+                    "25 - 50 kPa",
+                    "> 50 kPa"
                 ]
                 
-                # Apply breaks and colors
-                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
-                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                    sym.colorizer.classBreaks[i].color = colors[i]
-                    if i == 0:
-                        sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
-                    elif i == len(breaks) - 1:
-                        sym.colorizer.classBreaks[i].label = f"> {breaks[i-1]} kPa"
-                    else:
-                        sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
                 
-                # Apply symbology
+                # Step 4: Iterate through classBreaks (official Esri pattern)
+                for i, brk in enumerate(sym.colorizer.classBreaks):
+                    if i < len(breaks):
+                        brk.upperBound = breaks[i]
+                        brk.color = colors[i]
+                        brk.label = labels[i]
+                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
+                
+                # Step 5: Apply symbology
                 layer.symbology = sym
                 layer.transparency = 30
             
-            arcpy.AddMessage("Applied PPR symbology")
+            arcpy.AddMessage("Applied PPR symbology successfully")
         except Exception as e:
             arcpy.AddWarning(f"Could not apply PPR symbology: {e}")
 
@@ -454,43 +458,45 @@ class LoadALARMData(object):
         try:
             sym = layer.symbology
             if hasattr(sym, 'renderer'):
-                # Set to graduated colors
+                # Step 1: Switch to graduated colors renderer
                 sym.updateRenderer('GraduatedColorsRenderer')
                 sym.renderer.classificationField = "med_pres"
                 sym.renderer.breakCount = 5
                 
-                # First compute with EqualInterval to initialize breaks
-                sym.renderer.classificationMethod = "EqualInterval"
-                
-                # Now switch to Manual and set our custom breaks
-                sym.renderer.classificationMethod = "Manual"
-                
-                # Define breaks (0 to >500 kPa) - these are upper bounds
+                # Step 2: Define custom breaks, colors, and labels
                 breaks = [50, 100, 200, 500, 99999]
-                
-                # Define colors
                 colors = [
-                    {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue (0-50)
-                    {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue (50-100)
-                    {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue (100-200)
-                    {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue (200-500)
-                    {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
+                    {'HSV': [207, 12, 100, 100]},   # very light blue (0-50)
+                    {'HSV': [207, 40, 100, 100]},   # light blue (50-100)
+                    {'HSV': [213, 70, 100, 100]},   # medium blue (100-200)
+                    {'HSV': [213, 100, 80, 100]},   # dark blue (200-500)
+                    {'HSV': [213, 100, 48, 100]}    # very dark blue (>500)
+                ]
+                labels = [
+                    "0 - 50 kPa",
+                    "50 - 100 kPa",
+                    "100 - 200 kPa",
+                    "200 - 500 kPa",
+                    "> 500 kPa"
                 ]
                 
-                # Apply breaks and colors to each class
-                for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
-                    sym.renderer.classBreaks[i].upperBound = breaks[i]
-                    if i < len(colors):
-                        sym.renderer.classBreaks[i].symbol.color = colors[i]
-                        if i == len(breaks) - 1:
-                            sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
-                        else:
-                            sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
+                arcpy.AddMessage(f"  Tracks classBreaks available: {len(sym.renderer.classBreaks)}")
                 
+                # Step 3: Iterate through classBreaks (official Esri pattern)
+                for i, brk in enumerate(sym.renderer.classBreaks):
+                    if i < len(breaks):
+                        brk.upperBound = breaks[i]
+                        brk.label = labels[i]
+                        brk.symbol.color = colors[i]
+                        brk.symbol.outlineColor = {'RGB': [0, 0, 0, 100]}
+                        brk.symbol.size = 1
+                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
+                
+                # Step 4: Apply symbology
                 layer.symbology = sym
                 layer.transparency = 10
             
-            arcpy.AddMessage("Applied tracks symbology")
+            arcpy.AddMessage("Applied tracks symbology successfully")
         except Exception as e:
             arcpy.AddWarning(f"Could not apply tracks symbology: {e}")
 
@@ -719,86 +725,87 @@ class ApplySymbology(object):
         try:
             sym = layer.symbology
             if hasattr(sym, 'colorizer'):
-                # Update to classified colorizer
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # Set break count first
+                sym.colorizer.classificationField = "Value"
                 sym.colorizer.breakCount = 5
+                sym.colorizer.noDataColor = {'RGB': [0, 0, 0, 0]}
                 
-                # Use EqualInterval to initialize, then switch to Manual
-                sym.colorizer.classificationMethod = 'EqualInterval'
-                sym.colorizer.classificationMethod = 'Manual'
-                
-                # Define breaks (upper bounds) and colors
                 breaks = [1, 10, 25, 50, 99999]
                 colors = [
-                    {'RGB': [176, 244, 250, 100]},  # #b0f4fa - light blue (0.1-1)
-                    {'RGB': [117, 193, 101, 100]},  # #75c165 - green (1-10)
-                    {'RGB': [169, 108, 0, 100]},    # #a96c00 - orange (10-25)
-                    {'RGB': [139, 0, 105, 100]},    # #8b0069 - purple (25-50)
-                    {'RGB': [100, 0, 75, 100]}      # darker purple (>50)
+                    {'HSV': [186, 30, 98, 100]},   # light blue (0.1-1)
+                    {'HSV': [107, 49, 76, 100]},   # green (1-10)
+                    {'HSV': [28, 100, 66, 100]},    # orange (10-25)
+                    {'HSV': [310, 100, 55, 100]},   # purple (25-50)
+                    {'HSV': [320, 100, 39, 100]}    # darker purple (>50)
+                ]
+                labels = [
+                    "0.1 - 1 kPa",
+                    "1 - 10 kPa",
+                    "10 - 25 kPa",
+                    "25 - 50 kPa",
+                    "> 50 kPa"
                 ]
                 
-                # Apply breaks and colors
-                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
-                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                    sym.colorizer.classBreaks[i].color = colors[i]
-                    if i == 0:
-                        sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
-                    elif i == len(breaks) - 1:
-                        sym.colorizer.classBreaks[i].label = f"> {breaks[i-1]} kPa"
-                    else:
-                        sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
+                
+                for i, brk in enumerate(sym.colorizer.classBreaks):
+                    if i < len(breaks):
+                        brk.upperBound = breaks[i]
+                        brk.color = colors[i]
+                        brk.label = labels[i]
+                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
                 
                 layer.symbology = sym
                 layer.transparency = 30
             
-            arcpy.AddMessage("Applied PPR symbology (70% opacity)")
+            arcpy.AddMessage("Applied PPR symbology successfully")
         except Exception as e:
-            arcpy.AddError(f"Error: {e}")
+            arcpy.AddError(f"Error applying PPR symbology: {e}")
 
     def _apply_tracks_symbology(self, layer):
         """Apply tracks symbology."""
         try:
             sym = layer.symbology
-            sym.updateRenderer('GraduatedColorsRenderer')
-            sym.renderer.classificationField = "med_pres"
-            sym.renderer.breakCount = 5
+            if hasattr(sym, 'renderer'):
+                sym.updateRenderer('GraduatedColorsRenderer')
+                sym.renderer.classificationField = "med_pres"
+                sym.renderer.breakCount = 5
+                
+                breaks = [50, 100, 200, 500, 99999]
+                colors = [
+                    {'HSV': [207, 12, 100, 100]},   # very light blue (0-50)
+                    {'HSV': [207, 40, 100, 100]},   # light blue (50-100)
+                    {'HSV': [213, 70, 100, 100]},   # medium blue (100-200)
+                    {'HSV': [213, 100, 80, 100]},   # dark blue (200-500)
+                    {'HSV': [213, 100, 48, 100]}    # very dark blue (>500)
+                ]
+                labels = [
+                    "0 - 50 kPa",
+                    "50 - 100 kPa",
+                    "100 - 200 kPa",
+                    "200 - 500 kPa",
+                    "> 500 kPa"
+                ]
+                
+                arcpy.AddMessage(f"  Tracks classBreaks available: {len(sym.renderer.classBreaks)}")
+                
+                for i, brk in enumerate(sym.renderer.classBreaks):
+                    if i < len(breaks):
+                        brk.upperBound = breaks[i]
+                        brk.label = labels[i]
+                        brk.symbol.color = colors[i]
+                        brk.symbol.outlineColor = {'RGB': [0, 0, 0, 100]}
+                        brk.symbol.size = 1
+                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
+                
+                layer.symbology = sym
+                layer.transparency = 10
             
-            # First compute with EqualInterval to initialize breaks
-            sym.renderer.classificationMethod = "EqualInterval"
-            
-            # Now switch to Manual and set our custom breaks
-            sym.renderer.classificationMethod = "Manual"
-            
-            # Define breaks (0 to >500 kPa) - these are upper bounds
-            breaks = [50, 100, 200, 500, 99999]
-            
-            # Define colors
-            colors = [
-                {'RGB': [224, 243, 255, 100]},  # #e0f3ff - very light blue (0-50)
-                {'RGB': [153, 214, 255, 100]},  # #99d6ff - light blue (50-100)
-                {'RGB': [77, 166, 255, 100]},   # #4da6ff - medium blue (100-200)
-                {'RGB': [0, 102, 204, 100]},    # #0066cc - dark blue (200-500)
-                {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
-            ]
-            
-            # Apply breaks and colors
-            for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
-                sym.renderer.classBreaks[i].upperBound = breaks[i]
-                if i < len(colors):
-                    sym.renderer.classBreaks[i].symbol.color = colors[i]
-                    if i == len(breaks) - 1:
-                        sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
-                    else:
-                        sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
-            
-            layer.symbology = sym
-            layer.transparency = 10
-            arcpy.AddMessage("Applied tracks symbology (90% opacity, blue gradient 0-500+ kPa)")
+            arcpy.AddMessage("Applied tracks symbology successfully")
         except Exception as e:
-            arcpy.AddError(f"Error: {e}")
+            arcpy.AddError(f"Error applying tracks symbology: {e}")
 
     def _apply_pra_symbology(self, layer):
         """Apply PRA symbology."""
