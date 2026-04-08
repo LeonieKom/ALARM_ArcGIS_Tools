@@ -423,9 +423,6 @@ class LoadALARMData(object):
                 # Now switch to ManualInterval
                 sym.colorizer.classificationMethod = 'ManualInterval'
                 
-                # Set lower bound to exclude values below 0.1
-                sym.colorizer.lowerBound = 0.1
-                
                 # Define breaks (upper bounds) and colors
                 breaks = [1, 10, 25, 50, 200]
                 colors = [
@@ -445,6 +442,9 @@ class LoadALARMData(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                
+                # Set lower bound to exclude values below 0.1 (AFTER setting breaks)
+                sym.colorizer.classBreaks[0].lowerBound = 0.1
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -471,7 +471,7 @@ class LoadALARMData(object):
                 sym.renderer.classificationMethod = "Manual"
                 
                 # Define breaks (0 to >500 kPa) - these are upper bounds
-                breaks = [50, 100, 200, 500, 10000]
+                breaks = [50, 100, 200, 500, 99999]
                 
                 # Define colors
                 colors = [
@@ -487,7 +487,10 @@ class LoadALARMData(object):
                     sym.renderer.classBreaks[i].upperBound = breaks[i]
                     if i < len(colors):
                         sym.renderer.classBreaks[i].symbol.color = colors[i]
-                        sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
+                        if i == len(breaks) - 1:
+                            sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
+                        else:
+                            sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -745,9 +748,6 @@ class ApplySymbology(object):
                     {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
                 ]
                 
-                # Set lower bound to exclude values below 0.1
-                sym.colorizer.lowerBound = 0.1
-                
                 # Set breaks and colors for each class
                 for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
                     sym.colorizer.classBreaks[i].upperBound = breaks[i]
@@ -757,6 +757,9 @@ class ApplySymbology(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                
+                # Set lower bound to exclude values below 0.1 (AFTER setting breaks)
+                sym.colorizer.classBreaks[0].lowerBound = 0.1
                 
                 layer.symbology = sym
                 layer.transparency = 30
@@ -780,7 +783,7 @@ class ApplySymbology(object):
             sym.renderer.classificationMethod = "Manual"
             
             # Define breaks (0 to >500 kPa) - these are upper bounds
-            breaks = [50, 100, 200, 500, 10000]
+            breaks = [50, 100, 200, 500, 99999]
             
             # Define colors
             colors = [
@@ -796,7 +799,10 @@ class ApplySymbology(object):
                 sym.renderer.classBreaks[i].upperBound = breaks[i]
                 if i < len(colors):
                     sym.renderer.classBreaks[i].symbol.color = colors[i]
-                    sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
+                    if i == len(breaks) - 1:
+                        sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
+                    else:
+                        sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
             
             layer.symbology = sym
             layer.transparency = 10
