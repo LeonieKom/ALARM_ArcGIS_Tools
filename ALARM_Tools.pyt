@@ -413,19 +413,13 @@ class LoadALARMData(object):
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # Set classification field and break count
-                sym.colorizer.classificationField = "Value"
+                # CRITICAL: Use DefinedInterval first to properly initialize
+                sym.colorizer.classificationMethod = 'DefinedInterval'
                 sym.colorizer.breakCount = 5
+                sym.colorizer.intervalSize = 10
                 
-                # Exclude background values (0 and NoData)
-                sym.colorizer.exclusionRanges = [[0, 0.099]]
-                sym.colorizer.showClassGaps = False
-                
-                # First use EqualInterval to initialize breaks
-                sym.colorizer.classificationMethod = 'EqualInterval'
-                
-                # Now switch to ManualInterval
-                sym.colorizer.classificationMethod = 'ManualInterval'
+                # Now switch to Manual
+                sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
                 breaks = [1, 10, 25, 50, 200]
@@ -437,10 +431,13 @@ class LoadALARMData(object):
                     {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
                 ]
                 
-                # Set breaks and colors for each class
-                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
-                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                    if i < len(colors):
+                # Set minimum value to 0.1 to exclude background
+                sym.colorizer.minValue = 0.1
+                
+                # Apply breaks and colors
+                if len(sym.colorizer.classBreaks) >= len(breaks):
+                    for i in range(len(breaks)):
+                        sym.colorizer.classBreaks[i].upperBound = breaks[i]
                         sym.colorizer.classBreaks[i].color = colors[i]
                         if i == 0:
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
@@ -729,19 +726,13 @@ class ApplySymbology(object):
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # Set classification field and break count
-                sym.colorizer.classificationField = "Value"
+                # CRITICAL: Use DefinedInterval first to properly initialize
+                sym.colorizer.classificationMethod = 'DefinedInterval'
                 sym.colorizer.breakCount = 5
+                sym.colorizer.intervalSize = 10
                 
-                # Exclude background values (0 and NoData)
-                sym.colorizer.exclusionRanges = [[0, 0.099]]
-                sym.colorizer.showClassGaps = False
-                
-                # First use EqualInterval to initialize breaks
-                sym.colorizer.classificationMethod = 'EqualInterval'
-                
-                # Now switch to ManualInterval
-                sym.colorizer.classificationMethod = 'ManualInterval'
+                # Now switch to Manual
+                sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
                 breaks = [1, 10, 25, 50, 200]
@@ -753,10 +744,13 @@ class ApplySymbology(object):
                     {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
                 ]
                 
-                # Set breaks and colors for each class
-                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
-                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                    if i < len(colors):
+                # Set minimum value to 0.1 to exclude background
+                sym.colorizer.minValue = 0.1
+                
+                # Apply breaks and colors
+                if len(sym.colorizer.classBreaks) >= len(breaks):
+                    for i in range(len(breaks)):
+                        sym.colorizer.classBreaks[i].upperBound = breaks[i]
                         sym.colorizer.classBreaks[i].color = colors[i]
                         if i == 0:
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
