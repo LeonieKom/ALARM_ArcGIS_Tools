@@ -98,7 +98,72 @@ class LoadALARMData(object):
         
         param3.value = True
         
-        return [param0, param1, param2, param3]
+        # Parameter 4: Minimum Elevation (optional filter)
+        param4 = arcpy.Parameter(
+            displayName="Minimum Elevation (m)",
+            name="elev_min",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        # Parameter 5: Maximum Elevation (optional filter)
+        param5 = arcpy.Parameter(
+            displayName="Maximum Elevation (m)",
+            name="elev_max",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        # Parameter 6: Aspect Filter Type
+        param6 = arcpy.Parameter(
+            displayName="Aspect Filter Type",
+            name="aspect_type",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input")
+        
+        param6.filter.type = "ValueList"
+        param6.filter.list = ["None", "Cardinal Directions", "Degree Range"]
+        param6.value = "None"
+        
+        # Parameter 7: Cardinal Directions (multi-select)
+        param7 = arcpy.Parameter(
+            displayName="Cardinal Directions",
+            name="cardinal_dirs",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input",
+            multiValue=True)
+        
+        param7.filter.type = "ValueList"
+        param7.filter.list = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        param7.enabled = False
+        
+        # Parameter 8: Aspect Min (degrees)
+        param8 = arcpy.Parameter(
+            displayName="Aspect Min (degrees)",
+            name="aspect_min",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        param8.filter.type = "Range"
+        param8.filter.list = [0, 360]
+        param8.enabled = False
+        
+        # Parameter 9: Aspect Max (degrees)
+        param9 = arcpy.Parameter(
+            displayName="Aspect Max (degrees)",
+            name="aspect_max",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        param9.filter.type = "Range"
+        param9.filter.list = [0, 360]
+        param9.enabled = False
+        
+        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -107,6 +172,23 @@ class LoadALARMData(object):
     def updateParameters(self, parameters):
         """Modify the values and properties of parameters before internal
         validation is performed."""
+        # Enable/disable aspect parameters based on filter type
+        if parameters[6].value:  # aspect_type
+            aspect_type = parameters[6].valueAsText
+            
+            if aspect_type == "Cardinal Directions":
+                parameters[7].enabled = True  # cardinal_dirs
+                parameters[8].enabled = False  # aspect_min
+                parameters[9].enabled = False  # aspect_max
+            elif aspect_type == "Degree Range":
+                parameters[7].enabled = False  # cardinal_dirs
+                parameters[8].enabled = True   # aspect_min
+                parameters[9].enabled = True   # aspect_max
+            else:  # "None"
+                parameters[7].enabled = False
+                parameters[8].enabled = False
+                parameters[9].enabled = False
+        
         return
 
     def updateMessages(self, parameters):
@@ -125,8 +207,22 @@ class LoadALARMData(object):
         data_types = [dt.strip().strip("'\"") for dt in parameters[2].valueAsText.split(';')]
         use_group = parameters[3].value
         
+        # Get filter parameters
+        elev_min = parameters[4].value
+        elev_max = parameters[5].value
+        aspect_type = parameters[6].valueAsText if parameters[6].value else "None"
+        cardinal_dirs = parameters[7].valueAsText.split(';') if parameters[7].value else []
+        cardinal_dirs = [d.strip().strip("'\"") for d in cardinal_dirs] if cardinal_dirs else []
+        aspect_min = parameters[8].value
+        aspect_max = parameters[9].value
+        
         arcpy.AddMessage(f"Loading data for {region}, Scenario {scenario_id}")
         arcpy.AddMessage(f"Data types to load: {data_types}")
+        
+        # Build filter query if filters are specified
+        filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max)
+        if filter_query:
+            arcpy.AddMessage(f"Applying filters: {filter_query}")
         
         # Find scenario directory
         scenario_dir = self._find_scenario_dir(region, scenario_id)
@@ -171,6 +267,8 @@ class LoadALARMData(object):
                 arcpy.AddMessage(f"Loading tracks: {tracks_file.name}")
                 layer = map_obj.addDataFromPath(str(tracks_file))
                 self._apply_tracks_symbology(layer)
+                if filter_query:
+                    layer.definitionQuery = filter_query
                 layers_added.append(layer)
             else:
                 arcpy.AddWarning("Tracks shapefile not found")
@@ -182,6 +280,8 @@ class LoadALARMData(object):
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
                 layer = map_obj.addDataFromPath(str(pra_file))
                 self._apply_pra_symbology(layer)
+                if filter_query:
+                    layer.definitionQuery = filter_query
                 layers_added.append(layer)
             else:
                 arcpy.AddWarning("PRA shapefile not found")
@@ -195,6 +295,8 @@ class LoadALARMData(object):
                     arcpy.AddMessage(f"Loading risk assessment: {risk_file.name}")
                     layer = map_obj.addDataFromPath(str(risk_file))
                     self._apply_risk_symbology(layer)
+                    if filter_query:
+                        layer.definitionQuery = filter_query
                     layers_added.append(layer)
                 else:
                     arcpy.AddWarning("Risk assessment shapefile not found")
@@ -224,6 +326,53 @@ class LoadALARMData(object):
         arcpy.AddMessage(f"Successfully loaded {len(layers_added)} layers")
         
         return
+
+    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max):
+        """Build SQL WHERE clause for filtering based on elevation and aspect."""
+        conditions = []
+        
+        # Elevation filter
+        if elev_min is not None:
+            conditions.append(f"elev_mean >= {elev_min}")
+        if elev_max is not None:
+            conditions.append(f"elev_mean <= {elev_max}")
+        
+        # Aspect filter
+        if aspect_type == "Cardinal Directions" and cardinal_dirs:
+            # Convert cardinal directions to degree ranges
+            aspect_conditions = []
+            cardinal_ranges = {
+                'N': [(337.5, 360), (0, 22.5)],
+                'NE': [(22.5, 67.5)],
+                'E': [(67.5, 112.5)],
+                'SE': [(112.5, 157.5)],
+                'S': [(157.5, 202.5)],
+                'SW': [(202.5, 247.5)],
+                'W': [(247.5, 292.5)],
+                'NW': [(292.5, 337.5)]
+            }
+            
+            for direction in cardinal_dirs:
+                if direction in cardinal_ranges:
+                    for range_tuple in cardinal_ranges[direction]:
+                        if len(range_tuple) == 2:
+                            aspect_conditions.append(f"(aspect_mea >= {range_tuple[0]} AND aspect_mea < {range_tuple[1]})")
+            
+            if aspect_conditions:
+                conditions.append(f"({' OR '.join(aspect_conditions)})")
+        
+        elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
+            # Handle wrapping around 0/360 degrees
+            if aspect_min <= aspect_max:
+                conditions.append(f"(aspect_mea >= {aspect_min} AND aspect_mea <= {aspect_max})")
+            else:
+                # Wraps around (e.g., 350 to 10 degrees)
+                conditions.append(f"(aspect_mea >= {aspect_min} OR aspect_mea <= {aspect_max})")
+        
+        # Combine all conditions
+        if conditions:
+            return " AND ".join(conditions)
+        return None
 
     def _get_completed_regions(self):
         """Get list of regions with merged data (completed or partial)."""
