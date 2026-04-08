@@ -413,12 +413,11 @@ class LoadALARMData(object):
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # CRITICAL: Use DefinedInterval first to properly initialize
-                sym.colorizer.classificationMethod = 'DefinedInterval'
+                # Set break count first
                 sym.colorizer.breakCount = 5
-                sym.colorizer.intervalSize = 10
                 
-                # Now switch to Manual
+                # Use EqualInterval to initialize, then switch to Manual
+                sym.colorizer.classificationMethod = 'EqualInterval'
                 sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
@@ -432,18 +431,13 @@ class LoadALARMData(object):
                 ]
                 
                 # Apply breaks and colors
-                if len(sym.colorizer.classBreaks) >= len(breaks):
-                    for i in range(len(breaks)):
-                        sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                        sym.colorizer.classBreaks[i].color = colors[i]
-                        if i == 0:
-                            sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
-                        else:
-                            sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
-                
-                # Set background color to NoColor (transparent) for values below 0.1
-                sym.colorizer.backgroundLabel = "< 0.1 kPa"
-                sym.colorizer.backgroundColor = {'RGB': [0, 0, 0, 0]}  # Transparent
+                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
+                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
+                    sym.colorizer.classBreaks[i].color = colors[i]
+                    if i == 0:
+                        sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                    else:
+                        sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -481,9 +475,6 @@ class LoadALARMData(object):
                     {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
                 ]
                 
-                # Set minimum value to ensure all tracks are shown (including 0 and negative values)
-                sym.renderer.minimumBreak = -999999
-                
                 # Apply breaks and colors to each class
                 for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
                     sym.renderer.classBreaks[i].upperBound = breaks[i]
@@ -493,10 +484,6 @@ class LoadALARMData(object):
                             sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
                         else:
                             sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
-                
-                # Ensure the first break starts from the minimum
-                if len(sym.renderer.classBreaks) > 0:
-                    sym.renderer.classBreaks[0].lowerBound = -999999
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -734,12 +721,11 @@ class ApplySymbology(object):
                 if sym.colorizer.type != 'RasterClassifyColorizer':
                     sym.updateColorizer('RasterClassifyColorizer')
                 
-                # CRITICAL: Use DefinedInterval first to properly initialize
-                sym.colorizer.classificationMethod = 'DefinedInterval'
+                # Set break count first
                 sym.colorizer.breakCount = 5
-                sym.colorizer.intervalSize = 10
                 
-                # Now switch to Manual
+                # Use EqualInterval to initialize, then switch to Manual
+                sym.colorizer.classificationMethod = 'EqualInterval'
                 sym.colorizer.classificationMethod = 'Manual'
                 
                 # Define breaks (upper bounds) and colors
@@ -753,18 +739,13 @@ class ApplySymbology(object):
                 ]
                 
                 # Apply breaks and colors
-                if len(sym.colorizer.classBreaks) >= len(breaks):
-                    for i in range(len(breaks)):
-                        sym.colorizer.classBreaks[i].upperBound = breaks[i]
-                        sym.colorizer.classBreaks[i].color = colors[i]
-                        if i == 0:
-                            sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
-                        else:
-                            sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
-                
-                # Set background color to NoColor (transparent) for values below 0.1
-                sym.colorizer.backgroundLabel = "< 0.1 kPa"
-                sym.colorizer.backgroundColor = {'RGB': [0, 0, 0, 0]}  # Transparent
+                for i in range(min(len(breaks), len(sym.colorizer.classBreaks))):
+                    sym.colorizer.classBreaks[i].upperBound = breaks[i]
+                    sym.colorizer.classBreaks[i].color = colors[i]
+                    if i == 0:
+                        sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
+                    else:
+                        sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
                 layer.symbology = sym
                 layer.transparency = 30
@@ -799,9 +780,6 @@ class ApplySymbology(object):
                 {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
             ]
             
-            # Set minimum value to ensure all tracks are shown (including 0 and negative values)
-            sym.renderer.minimumBreak = -999999
-            
             # Apply breaks and colors
             for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
                 sym.renderer.classBreaks[i].upperBound = breaks[i]
@@ -811,10 +789,6 @@ class ApplySymbology(object):
                         sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
                     else:
                         sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
-            
-            # Ensure the first break starts from the minimum
-            if len(sym.renderer.classBreaks) > 0:
-                sym.renderer.classBreaks[0].lowerBound = -999999
             
             layer.symbology = sym
             layer.transparency = 10
