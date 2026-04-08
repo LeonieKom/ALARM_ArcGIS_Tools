@@ -481,6 +481,9 @@ class LoadALARMData(object):
                     {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
                 ]
                 
+                # Set minimum value to ensure all tracks are shown (including 0 and negative values)
+                sym.renderer.minimumBreak = -999999
+                
                 # Apply breaks and colors to each class
                 for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
                     sym.renderer.classBreaks[i].upperBound = breaks[i]
@@ -490,6 +493,10 @@ class LoadALARMData(object):
                             sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
                         else:
                             sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
+                
+                # Ensure the first break starts from the minimum
+                if len(sym.renderer.classBreaks) > 0:
+                    sym.renderer.classBreaks[0].lowerBound = -999999
                 
                 layer.symbology = sym
                 layer.transparency = 10
@@ -792,6 +799,9 @@ class ApplySymbology(object):
                 {'RGB': [0, 61, 122, 100]}      # #003d7a - very dark blue (>500)
             ]
             
+            # Set minimum value to ensure all tracks are shown (including 0 and negative values)
+            sym.renderer.minimumBreak = -999999
+            
             # Apply breaks and colors
             for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
                 sym.renderer.classBreaks[i].upperBound = breaks[i]
@@ -801,6 +811,10 @@ class ApplySymbology(object):
                         sym.renderer.classBreaks[i].label = f"> {breaks[i-1]}"
                     else:
                         sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
+            
+            # Ensure the first break starts from the minimum
+            if len(sym.renderer.classBreaks) > 0:
+                sym.renderer.classBreaks[0].lowerBound = -999999
             
             layer.symbology = sym
             layer.transparency = 10
