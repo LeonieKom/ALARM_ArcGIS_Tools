@@ -295,6 +295,9 @@ class LoadALARMData(object):
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
                 
+                # Set lower bound to exclude values below 0.1
+                sym.colorizer.lowerBound = 0.1
+                
                 # Apply symbology
                 layer.symbology = sym
                 layer.transparency = 30
@@ -604,6 +607,9 @@ class ApplySymbology(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                
+                # Set lower bound to exclude values below 0.1
+                sym.colorizer.lowerBound = 0.1
                 
                 layer.symbology = sym
                 layer.transparency = 30
