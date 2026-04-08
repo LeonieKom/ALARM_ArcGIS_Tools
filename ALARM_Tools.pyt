@@ -431,9 +431,6 @@ class LoadALARMData(object):
                     {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
                 ]
                 
-                # Set minimum value to 0.1 to exclude background
-                sym.colorizer.minValue = 0.1
-                
                 # Apply breaks and colors
                 if len(sym.colorizer.classBreaks) >= len(breaks):
                     for i in range(len(breaks)):
@@ -443,6 +440,10 @@ class LoadALARMData(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                
+                # Set background color to NoColor (transparent) for values below 0.1
+                sym.colorizer.backgroundLabel = "< 0.1 kPa"
+                sym.colorizer.backgroundColor = {'RGB': [0, 0, 0, 0]}  # Transparent
                 
                 # Apply symbology
                 layer.symbology = sym
@@ -744,9 +745,6 @@ class ApplySymbology(object):
                     {'RGB': [100, 0, 75, 100]}      # darker purple (50-200)
                 ]
                 
-                # Set minimum value to 0.1 to exclude background
-                sym.colorizer.minValue = 0.1
-                
                 # Apply breaks and colors
                 if len(sym.colorizer.classBreaks) >= len(breaks):
                     for i in range(len(breaks)):
@@ -756,6 +754,10 @@ class ApplySymbology(object):
                             sym.colorizer.classBreaks[i].label = f"0.1 - {breaks[i]} kPa"
                         else:
                             sym.colorizer.classBreaks[i].label = f"{breaks[i-1]} - {breaks[i]} kPa"
+                
+                # Set background color to NoColor (transparent) for values below 0.1
+                sym.colorizer.backgroundLabel = "< 0.1 kPa"
+                sym.colorizer.backgroundColor = {'RGB': [0, 0, 0, 0]}  # Transparent
                 
                 layer.symbology = sym
                 layer.transparency = 30
