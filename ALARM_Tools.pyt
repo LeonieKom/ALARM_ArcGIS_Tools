@@ -212,8 +212,21 @@ class LoadALARMData(object):
             group_name = f"{region} - Scenario {scenario_id}"
             arcpy.AddMessage(f"Organizing layers in group: {group_name}")
             try:
-                # Create group layer
-                group_layer = map_obj.createGroupLayer(group_name)
+                # Check if group already exists
+                existing_group = None
+                for lyr in map_obj.listLayers():
+                    if lyr.isGroupLayer and lyr.name == group_name:
+                        existing_group = lyr
+                        arcpy.AddMessage(f"Found existing group: {group_name}")
+                        break
+                
+                # Create group if it doesn't exist
+                if existing_group is None:
+                    group_layer = map_obj.createGroupLayer(group_name)
+                    arcpy.AddMessage(f"Created new group layer: {group_name}")
+                else:
+                    group_layer = existing_group
+                    arcpy.AddMessage(f"Adding to existing group: {group_name}")
                 
                 # Add layers to group (this creates copies in the group)
                 for lyr in layers_added:
@@ -223,9 +236,9 @@ class LoadALARMData(object):
                 for lyr in layers_added:
                     map_obj.removeLayer(lyr)
                     
-                arcpy.AddMessage(f"Created group layer: {group_name}")
+                arcpy.AddMessage(f"Layers organized in group: {group_name}")
             except Exception as e:
-                arcpy.AddWarning(f"Could not create group layer: {e}")
+                arcpy.AddWarning(f"Could not organize group layer: {e}")
         
         arcpy.AddMessage(f"Successfully loaded {len(layers_added)} layers")
         
@@ -275,7 +288,10 @@ class LoadALARMData(object):
                 sym.colorizer.breakCount = 5
                 sym.colorizer.noDataColor = {'RGB': [0, 0, 0, 0]}
                 
-                # Step 3: Define custom breaks, colors and labels
+                # Step 3: Set minimum break to exclude background values
+                sym.colorizer.minimumBreak = 0.1
+                
+                # Step 4: Define custom breaks, colors and labels
                 breaks = [1, 10, 25, 50, 99999]
                 colors = [
                     {'HSV': [186, 30, 98, 100]},   # light blue (0.1-1)
@@ -293,8 +309,9 @@ class LoadALARMData(object):
                 ]
                 
                 arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
+                arcpy.AddMessage(f"  Set minimumBreak to 0.1 to exclude background")
                 
-                # Step 4: Iterate through classBreaks (official Esri pattern)
+                # Step 5: Iterate through classBreaks (official Esri pattern)
                 for i, brk in enumerate(sym.colorizer.classBreaks):
                     if i < len(breaks):
                         brk.upperBound = breaks[i]
@@ -690,8 +707,8 @@ class FilterLayers(object):
                 filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "pra_elev", "pra_aspdeg")
                 
             elif "PRAs" in layers_to_filter and "pra_" in layer_name and "track" not in layer_name:
-                # PRAs: elev_med, aspect_deg
-                filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
+                # PRAs: elev_med, aspect_deg (NOTE: These are String fields, need CAST)
+                filter_query = self._build_filter_query_string_fields(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
                 
             elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
                 # Risk Assessment: pra_elev, pra_aspct (but aspect is string, skip aspect filter)
@@ -765,6 +782,55 @@ class FilterLayers(object):
                 else:
                     # Wraps around (e.g., 350 to 10 degrees)
                     conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
+        
+        # Combine all conditions
+        if conditions:
+            return " AND ".join(conditions)
+        return None
+
+    def _build_filter_query_string_fields(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, elev_field, aspect_field):
+        """Build SQL WHERE clause for layers with String fields (PRAs).
+        
+        Args:
+            Same as _build_filter_query, but fields are String type and need CAST
+        """
+        conditions = []
+        
+        # Elevation filter - CAST String to Double
+        if elev_field and elev_min is not None:
+            conditions.append(f"CAST({elev_field} AS DOUBLE) >= {elev_min}")
+        if elev_field and elev_max is not None:
+            conditions.append(f"CAST({elev_field} AS DOUBLE) <= {elev_max}")
+        
+        # Aspect filter - CAST String to Double
+        if aspect_field:
+            if aspect_type == "Cardinal Directions" and cardinal_dirs:
+                aspect_conditions = []
+                cardinal_ranges = {
+                    'N': [(337.5, 360), (0, 22.5)],
+                    'NE': [(22.5, 67.5)],
+                    'E': [(67.5, 112.5)],
+                    'SE': [(112.5, 157.5)],
+                    'S': [(157.5, 202.5)],
+                    'SW': [(202.5, 247.5)],
+                    'W': [(247.5, 292.5)],
+                    'NW': [(292.5, 337.5)]
+                }
+                
+                for direction in cardinal_dirs:
+                    if direction in cardinal_ranges:
+                        for range_tuple in cardinal_ranges[direction]:
+                            if len(range_tuple) == 2:
+                                aspect_conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {range_tuple[0]} AND CAST({aspect_field} AS DOUBLE) < {range_tuple[1]})")
+                
+                if aspect_conditions:
+                    conditions.append(f"({' OR '.join(aspect_conditions)})")
+            
+            elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
+                if aspect_min <= aspect_max:
+                    conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {aspect_min} AND CAST({aspect_field} AS DOUBLE) <= {aspect_max})")
+                else:
+                    conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {aspect_min} OR CAST({aspect_field} AS DOUBLE) <= {aspect_max})")
         
         # Combine all conditions
         if conditions:
