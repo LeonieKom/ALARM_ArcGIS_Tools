@@ -72,8 +72,10 @@ Data Types: Tracks, Risk Assessment
 
 Apply advanced filters to loaded layers based on elevation, aspect, safety class, and pressure.
 
+**Note:** PRAs cannot be filtered because their elevation and aspect fields are stored as String type in shapefiles, which prevents numeric comparisons.
+
 **Parameters:**
-- **Layers to Filter**: Multi-select (Tracks, PRAs, Risk Assessment)
+- **Layers to Filter**: Multi-select (Tracks, Risk Assessment)
 - **Elevation**: Min/Max range (meters)
 - **Aspect Filter Type**: None, Cardinal Directions, or Degree Range
   - **Cardinal Directions**: Multi-select (N, NE, E, SE, S, SW, W, NW)
@@ -83,9 +85,9 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 
 **What it does:**
 - Applies SQL definition queries to selected layers
-- Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, PRAs: `elev_med`/`aspect_deg`, Risk: `pra_elev`)
+- Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, Risk Assessment: `pra_elev`)
 - Filters are cumulative (AND logic)
-- Shows applied query in messages
+- Shows applied query and feature counts in messages
 
 **Example:**
 ```

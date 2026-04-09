@@ -533,7 +533,7 @@ class FilterLayers(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "Filter Layers"
-        self.description = "Apply filters to ALARM layers (Tracks, PRAs, Risk Assessment)"
+        self.description = "Apply filters to ALARM layers (Tracks, Risk Assessment). Note: PRAs cannot be filtered due to String field types."
         self.canRunInBackground = False
 
     def getParameterInfo(self):
@@ -549,7 +549,7 @@ class FilterLayers(object):
             multiValue=True)
         
         param0.filter.type = "ValueList"
-        param0.filter.list = ["Tracks", "PRAs", "Risk Assessment"]
+        param0.filter.list = ["Tracks", "Risk Assessment"]  # PRAs removed - String fields cannot be filtered
         
         # Parameter 1: Minimum Elevation (optional)
         param1 = arcpy.Parameter(
@@ -708,10 +708,6 @@ class FilterLayers(object):
                 # Tracks: pra_elev, pra_aspdeg
                 filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "pra_elev", "pra_aspdeg")
                 
-            elif "PRAs" in layers_to_filter and "pra_" in layer_name and "track" not in layer_name:
-                # PRAs: elev_med, aspect_deg (NOTE: These are String fields, need CAST)
-                filter_query = self._build_filter_query_string_fields(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
-                
             elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
                 # Risk Assessment: pra_elev, pra_aspct (but aspect is string, skip aspect filter)
                 # Add building-specific filters
@@ -797,60 +793,6 @@ class FilterLayers(object):
                     conditions.append(f"({aspect_field} >= {aspect_min} AND {aspect_field} <= {aspect_max})")
                 else:
                     # Wraps around (e.g., 350 to 10 degrees)
-                    conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
-        
-        # Combine all conditions
-        if conditions:
-            return " AND ".join(conditions)
-        return None
-
-    def _build_filter_query_string_fields(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, elev_field, aspect_field):
-        """Build SQL WHERE clause for layers with String fields (PRAs).
-        
-        NOTE: Shapefiles don't support CAST. We try direct numeric comparison - 
-        arcpy sometimes auto-converts String to numeric for comparison.
-        If this doesn't work, PRAs filtering may need to be disabled.
-        
-        Args:
-            Same as _build_filter_query, but fields are String type
-        """
-        conditions = []
-        
-        # Elevation filter - Try direct numeric comparison (no CAST for shapefiles)
-        # arcpy may auto-convert String to numeric
-        if elev_field and elev_min is not None:
-            conditions.append(f"{elev_field} >= {elev_min}")
-        if elev_field and elev_max is not None:
-            conditions.append(f"{elev_field} <= {elev_max}")
-        
-        # Aspect filter - Try direct numeric comparison
-        if aspect_field:
-            if aspect_type == "Cardinal Directions" and cardinal_dirs:
-                aspect_conditions = []
-                cardinal_ranges = {
-                    'N': [(337.5, 360), (0, 22.5)],
-                    'NE': [(22.5, 67.5)],
-                    'E': [(67.5, 112.5)],
-                    'SE': [(112.5, 157.5)],
-                    'S': [(157.5, 202.5)],
-                    'SW': [(202.5, 247.5)],
-                    'W': [(247.5, 292.5)],
-                    'NW': [(292.5, 337.5)]
-                }
-                
-                for direction in cardinal_dirs:
-                    if direction in cardinal_ranges:
-                        for range_tuple in cardinal_ranges[direction]:
-                            if len(range_tuple) == 2:
-                                aspect_conditions.append(f"({aspect_field} >= {range_tuple[0]} AND {aspect_field} < {range_tuple[1]})")
-                
-                if aspect_conditions:
-                    conditions.append(f"({' OR '.join(aspect_conditions)})")
-            
-            elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
-                if aspect_min <= aspect_max:
-                    conditions.append(f"({aspect_field} >= {aspect_min} AND {aspect_field} <= {aspect_max})")
-                else:
                     conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
         
         # Combine all conditions
