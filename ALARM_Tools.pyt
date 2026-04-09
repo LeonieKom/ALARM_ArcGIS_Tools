@@ -288,12 +288,11 @@ class LoadALARMData(object):
                 sym.colorizer.breakCount = 5
                 sym.colorizer.noDataColor = {'RGB': [0, 0, 0, 0]}
                 
-                # Step 3: Set minimum break to exclude background values
-                sym.colorizer.minimumBreak = 0.1
-                
-                # Step 4: Define custom breaks, colors and labels
-                breaks = [1, 10, 25, 50, 99999]
+                # Step 3: Define custom breaks starting at 0.1, colors and labels
+                # First break starts at 0.1 to exclude background
+                breaks = [0.1, 1, 10, 25, 50, 99999]
                 colors = [
+                    {'RGB': [0, 0, 0, 0]},          # transparent (0-0.1) - HIDE BACKGROUND
                     {'HSV': [186, 30, 98, 100]},   # light blue (0.1-1)
                     {'HSV': [107, 49, 76, 100]},   # green (1-10)
                     {'HSV': [28, 100, 66, 100]},    # orange (10-25)
@@ -301,6 +300,7 @@ class LoadALARMData(object):
                     {'HSV': [320, 100, 39, 100]}    # darker purple (>50)
                 ]
                 labels = [
+                    "< 0.1 kPa (hidden)",
                     "0.1 - 1 kPa",
                     "1 - 10 kPa",
                     "10 - 25 kPa",
@@ -308,16 +308,18 @@ class LoadALARMData(object):
                     "> 50 kPa"
                 ]
                 
-                arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
-                arcpy.AddMessage(f"  Set minimumBreak to 0.1 to exclude background")
+                # Update break count to match
+                sym.colorizer.breakCount = len(breaks)
                 
-                # Step 5: Iterate through classBreaks (official Esri pattern)
+                arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
+                
+                # Step 4: Iterate through classBreaks (official Esri pattern)
                 for i, brk in enumerate(sym.colorizer.classBreaks):
                     if i < len(breaks):
                         brk.upperBound = breaks[i]
                         brk.color = colors[i]
                         brk.label = labels[i]
-                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
+                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}, transparent={i==0}")
                 
                 # Step 5: Apply symbology
                 layer.symbology = sym
@@ -717,12 +719,26 @@ class FilterLayers(object):
             
             if filter_query:
                 try:
+                    # Get feature count before filter
+                    count_before = int(arcpy.GetCount_management(layer)[0])
+                    
                     layer.definitionQuery = filter_query
                     arcpy.AddMessage(f"  Applied filter to: {layer.name}")
                     arcpy.AddMessage(f"    Query: {filter_query}")
+                    
+                    # Get feature count after filter
+                    count_after = int(arcpy.GetCount_management(layer)[0])
+                    arcpy.AddMessage(f"    Features: {count_before} → {count_after}")
+                    
+                    if count_after == 0:
+                        arcpy.AddWarning(f"    WARNING: Filter resulted in 0 features for {layer.name}")
+                        arcpy.AddWarning(f"    This may indicate the filter query is too restrictive or has syntax errors")
+                    
                     layers_filtered += 1
+                        
                 except Exception as e:
-                    arcpy.AddWarning(f"  Could not filter {layer.name}: {e}")
+                    arcpy.AddWarning(f"  Failed to apply filter to {layer.name}: {e}")
+                    arcpy.AddWarning(f"  Query was: {filter_query}")
         
         if layers_filtered == 0:
             arcpy.AddWarning("No matching layers found in current map.")
@@ -791,18 +807,23 @@ class FilterLayers(object):
     def _build_filter_query_string_fields(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, elev_field, aspect_field):
         """Build SQL WHERE clause for layers with String fields (PRAs).
         
+        NOTE: Shapefiles don't support CAST. We try direct numeric comparison - 
+        arcpy sometimes auto-converts String to numeric for comparison.
+        If this doesn't work, PRAs filtering may need to be disabled.
+        
         Args:
-            Same as _build_filter_query, but fields are String type and need CAST
+            Same as _build_filter_query, but fields are String type
         """
         conditions = []
         
-        # Elevation filter - CAST String to Double
+        # Elevation filter - Try direct numeric comparison (no CAST for shapefiles)
+        # arcpy may auto-convert String to numeric
         if elev_field and elev_min is not None:
-            conditions.append(f"CAST({elev_field} AS DOUBLE) >= {elev_min}")
+            conditions.append(f"{elev_field} >= {elev_min}")
         if elev_field and elev_max is not None:
-            conditions.append(f"CAST({elev_field} AS DOUBLE) <= {elev_max}")
+            conditions.append(f"{elev_field} <= {elev_max}")
         
-        # Aspect filter - CAST String to Double
+        # Aspect filter - Try direct numeric comparison
         if aspect_field:
             if aspect_type == "Cardinal Directions" and cardinal_dirs:
                 aspect_conditions = []
@@ -821,16 +842,16 @@ class FilterLayers(object):
                     if direction in cardinal_ranges:
                         for range_tuple in cardinal_ranges[direction]:
                             if len(range_tuple) == 2:
-                                aspect_conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {range_tuple[0]} AND CAST({aspect_field} AS DOUBLE) < {range_tuple[1]})")
+                                aspect_conditions.append(f"({aspect_field} >= {range_tuple[0]} AND {aspect_field} < {range_tuple[1]})")
                 
                 if aspect_conditions:
                     conditions.append(f"({' OR '.join(aspect_conditions)})")
             
             elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
                 if aspect_min <= aspect_max:
-                    conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {aspect_min} AND CAST({aspect_field} AS DOUBLE) <= {aspect_max})")
+                    conditions.append(f"({aspect_field} >= {aspect_min} AND {aspect_field} <= {aspect_max})")
                 else:
-                    conditions.append(f"(CAST({aspect_field} AS DOUBLE) >= {aspect_min} OR CAST({aspect_field} AS DOUBLE) <= {aspect_max})")
+                    conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
         
         # Combine all conditions
         if conditions:
