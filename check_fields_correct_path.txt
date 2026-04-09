@@ -1,0 +1,22 @@
+KORRIGIERTER CODE für ArcGIS Pro Python Window:
+=====================================================
+
+import arcpy
+
+# Checke Tracks Felder
+tracks = r"L:\ALARM\Results\Vest_Finnmark\merged\E_75-55_prox150_rel2.3m\tracks_Vest_Finnmark_E_75-55_prox150_rel2.3m.shp"
+print("TRACKS FIELDS:")
+for f in arcpy.ListFields(tracks):
+    print(f"  {f.name} ({f.type})")
+
+# Checke PRAs Felder
+pras = r"L:\ALARM\Results\Vest_Finnmark\merged\E_75-55_prox150_rel2.3m\pra_Vest_Finnmark_E_75-55_prox150_rel2.3m.shp"
+print("\nPRAs FIELDS:")
+for f in arcpy.ListFields(pras):
+    print(f"  {f.name} ({f.type})")
+
+# Checke Risk Assessment Felder  
+risk = r"L:\ALARM\Results\Vest_Finnmark\merged\E_75-55_prox150_rel2.3m\risk_assessment\risk_Vest_Finnmark_E_75-55_prox150_rel2.3m.shp"
+print("\nRISK ASSESSMENT FIELDS:")
+for f in arcpy.ListFields(risk):
+    print(f"  {f.name} ({f.type})")

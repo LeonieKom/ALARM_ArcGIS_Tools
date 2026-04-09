@@ -597,7 +597,27 @@ class FilterLayers(object):
         param6.filter.list = [0, 360]
         param6.enabled = False
         
-        return [param0, param1, param2, param3, param4, param5, param6]
+        # Parameter 7: Safety Class (Risk Assessment only)
+        param7 = arcpy.Parameter(
+            displayName="Building Safety Class (Risk Assessment)",
+            name="saf_class",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input",
+            multiValue=True)
+        
+        param7.filter.type = "ValueList"
+        param7.filter.list = ["S1", "S2", "S3", "S4"]  # Common safety classes
+        
+        # Parameter 8: Minimum Max PPR (Risk Assessment only)
+        param8 = arcpy.Parameter(
+            displayName="Minimum Max PPR (kPa, Risk Assessment)",
+            name="min_max_ppr",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        return [param0, param1, param2, param3, param4, param5, param6, param7, param8]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -640,17 +660,11 @@ class FilterLayers(object):
         cardinal_dirs = [d.strip().strip("'\"") for d in cardinal_dirs] if cardinal_dirs else []
         aspect_min = parameters[5].value
         aspect_max = parameters[6].value
+        saf_classes = parameters[7].valueAsText.split(';') if parameters[7].value else []
+        saf_classes = [s.strip().strip("'\"") for s in saf_classes] if saf_classes else []
+        min_max_ppr = parameters[8].value
         
         arcpy.AddMessage(f"Filtering layers: {', '.join(layers_to_filter)}")
-        
-        # Build filter query
-        filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max)
-        
-        if not filter_query:
-            arcpy.AddWarning("No filters specified. No changes will be made.")
-            return
-        
-        arcpy.AddMessage(f"Filter query: {filter_query}")
         
         # Get current map
         aprx = arcpy.mp.ArcGISProject("CURRENT")
@@ -663,21 +677,32 @@ class FilterLayers(object):
         # Apply filters to selected layers
         layers_filtered = 0
         for layer in map_obj.listLayers():
+            if not layer.isFeatureLayer:
+                continue
+                
             layer_name = layer.name.lower()
             
-            # Check if this layer should be filtered
-            should_filter = False
-            if "Tracks" in layers_to_filter and "track" in layer_name:
-                should_filter = True
-            elif "PRAs" in layers_to_filter and "pra" in layer_name:
-                should_filter = True
-            elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
-                should_filter = True
+            # Determine layer type and build appropriate filter
+            filter_query = None
             
-            if should_filter:
+            if "Tracks" in layers_to_filter and "track" in layer_name:
+                # Tracks: pra_elev, pra_aspdeg
+                filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "pra_elev", "pra_aspdeg")
+                
+            elif "PRAs" in layers_to_filter and "pra_" in layer_name and "track" not in layer_name:
+                # PRAs: elev_med, aspect_deg
+                filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
+                
+            elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
+                # Risk Assessment: pra_elev, pra_aspct (but aspect is string, skip aspect filter)
+                # Add building-specific filters
+                filter_query = self._build_risk_filter_query(elev_min, elev_max, saf_classes, min_max_ppr)
+            
+            if filter_query:
                 try:
                     layer.definitionQuery = filter_query
                     arcpy.AddMessage(f"  Applied filter to: {layer.name}")
+                    arcpy.AddMessage(f"    Query: {filter_query}")
                     layers_filtered += 1
                 except Exception as e:
                     arcpy.AddWarning(f"  Could not filter {layer.name}: {e}")
@@ -689,47 +714,88 @@ class FilterLayers(object):
         
         return
 
-    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max):
-        """Build SQL WHERE clause for filtering based on elevation and aspect."""
+    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, elev_field, aspect_field):
+        """Build SQL WHERE clause for filtering based on elevation and aspect.
+        
+        Args:
+            elev_min, elev_max: Elevation range
+            aspect_type: "None", "Cardinal Directions", or "Degree Range"
+            cardinal_dirs: List of cardinal directions
+            aspect_min, aspect_max: Aspect degree range
+            elev_field: Name of elevation field (e.g., "pra_elev", "elev_med")
+            aspect_field: Name of aspect field (e.g., "pra_aspdeg", "aspect_deg") or None
+        """
+        conditions = []
+        
+        # Elevation filter
+        if elev_field and elev_min is not None:
+            conditions.append(f"{elev_field} >= {elev_min}")
+        if elev_field and elev_max is not None:
+            conditions.append(f"{elev_field} <= {elev_max}")
+        
+        # Aspect filter (only if aspect_field is provided and numeric)
+        if aspect_field:
+            if aspect_type == "Cardinal Directions" and cardinal_dirs:
+                # Convert cardinal directions to degree ranges
+                aspect_conditions = []
+                cardinal_ranges = {
+                    'N': [(337.5, 360), (0, 22.5)],
+                    'NE': [(22.5, 67.5)],
+                    'E': [(67.5, 112.5)],
+                    'SE': [(112.5, 157.5)],
+                    'S': [(157.5, 202.5)],
+                    'SW': [(202.5, 247.5)],
+                    'W': [(247.5, 292.5)],
+                    'NW': [(292.5, 337.5)]
+                }
+                
+                for direction in cardinal_dirs:
+                    if direction in cardinal_ranges:
+                        for range_tuple in cardinal_ranges[direction]:
+                            if len(range_tuple) == 2:
+                                aspect_conditions.append(f"({aspect_field} >= {range_tuple[0]} AND {aspect_field} < {range_tuple[1]})")
+                
+                if aspect_conditions:
+                    conditions.append(f"({' OR '.join(aspect_conditions)})")
+            
+            elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
+                # Handle wrapping around 0/360 degrees
+                if aspect_min <= aspect_max:
+                    conditions.append(f"({aspect_field} >= {aspect_min} AND {aspect_field} <= {aspect_max})")
+                else:
+                    # Wraps around (e.g., 350 to 10 degrees)
+                    conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
+        
+        # Combine all conditions
+        if conditions:
+            return " AND ".join(conditions)
+        return None
+
+    def _build_risk_filter_query(self, elev_min, elev_max, saf_classes, min_max_ppr):
+        """Build SQL WHERE clause for Risk Assessment layer filtering.
+        
+        Args:
+            elev_min, elev_max: Elevation range (uses pra_elev field)
+            saf_classes: List of safety classes (e.g., ["S1", "S2"])
+            min_max_ppr: Minimum max_ppr threshold
+        """
         conditions = []
         
         # Elevation filter
         if elev_min is not None:
-            conditions.append(f"elev_mean >= {elev_min}")
+            conditions.append(f"pra_elev >= {elev_min}")
         if elev_max is not None:
-            conditions.append(f"elev_mean <= {elev_max}")
+            conditions.append(f"pra_elev <= {elev_max}")
         
-        # Aspect filter
-        if aspect_type == "Cardinal Directions" and cardinal_dirs:
-            # Convert cardinal directions to degree ranges
-            aspect_conditions = []
-            cardinal_ranges = {
-                'N': [(337.5, 360), (0, 22.5)],
-                'NE': [(22.5, 67.5)],
-                'E': [(67.5, 112.5)],
-                'SE': [(112.5, 157.5)],
-                'S': [(157.5, 202.5)],
-                'SW': [(202.5, 247.5)],
-                'W': [(247.5, 292.5)],
-                'NW': [(292.5, 337.5)]
-            }
-            
-            for direction in cardinal_dirs:
-                if direction in cardinal_ranges:
-                    for range_tuple in cardinal_ranges[direction]:
-                        if len(range_tuple) == 2:
-                            aspect_conditions.append(f"(aspect_mea >= {range_tuple[0]} AND aspect_mea < {range_tuple[1]})")
-            
-            if aspect_conditions:
-                conditions.append(f"({' OR '.join(aspect_conditions)})")
+        # Safety class filter
+        if saf_classes:
+            # SQL IN clause for multiple safety classes
+            classes_str = "', '".join(saf_classes)
+            conditions.append(f"saf_class IN ('{classes_str}')")
         
-        elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
-            # Handle wrapping around 0/360 degrees
-            if aspect_min <= aspect_max:
-                conditions.append(f"(aspect_mea >= {aspect_min} AND aspect_mea <= {aspect_max})")
-            else:
-                # Wraps around (e.g., 350 to 10 degrees)
-                conditions.append(f"(aspect_mea >= {aspect_min} OR aspect_mea <= {aspect_max})")
+        # Max PPR filter
+        if min_max_ppr is not None:
+            conditions.append(f"max_ppr >= {min_max_ppr}")
         
         # Combine all conditions
         if conditions:
