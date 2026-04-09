@@ -27,7 +27,7 @@ class Toolbox(object):
         self.description = "Tools for loading and managing ALARM regional avalanche data"
         
         # List of tool classes associated with this toolbox
-        self.tools = [LoadALARMData, UpdateOverview, ApplySymbology]
+        self.tools = [LoadALARMData, FilterLayers, UpdateOverview]
 
 
 class LoadALARMData(object):
@@ -98,72 +98,7 @@ class LoadALARMData(object):
         
         param3.value = True
         
-        # Parameter 4: Minimum Elevation (optional filter)
-        param4 = arcpy.Parameter(
-            displayName="Minimum Elevation (m)",
-            name="elev_min",
-            datatype="GPDouble",
-            parameterType="Optional",
-            direction="Input")
-        
-        # Parameter 5: Maximum Elevation (optional filter)
-        param5 = arcpy.Parameter(
-            displayName="Maximum Elevation (m)",
-            name="elev_max",
-            datatype="GPDouble",
-            parameterType="Optional",
-            direction="Input")
-        
-        # Parameter 6: Aspect Filter Type
-        param6 = arcpy.Parameter(
-            displayName="Aspect Filter Type",
-            name="aspect_type",
-            datatype="GPString",
-            parameterType="Optional",
-            direction="Input")
-        
-        param6.filter.type = "ValueList"
-        param6.filter.list = ["None", "Cardinal Directions", "Degree Range"]
-        param6.value = "None"
-        
-        # Parameter 7: Cardinal Directions (multi-select)
-        param7 = arcpy.Parameter(
-            displayName="Cardinal Directions",
-            name="cardinal_dirs",
-            datatype="GPString",
-            parameterType="Optional",
-            direction="Input",
-            multiValue=True)
-        
-        param7.filter.type = "ValueList"
-        param7.filter.list = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-        param7.enabled = False
-        
-        # Parameter 8: Aspect Min (degrees)
-        param8 = arcpy.Parameter(
-            displayName="Aspect Min (degrees)",
-            name="aspect_min",
-            datatype="GPDouble",
-            parameterType="Optional",
-            direction="Input")
-        
-        param8.filter.type = "Range"
-        param8.filter.list = [0, 360]
-        param8.enabled = False
-        
-        # Parameter 9: Aspect Max (degrees)
-        param9 = arcpy.Parameter(
-            displayName="Aspect Max (degrees)",
-            name="aspect_max",
-            datatype="GPDouble",
-            parameterType="Optional",
-            direction="Input")
-        
-        param9.filter.type = "Range"
-        param9.filter.list = [0, 360]
-        param9.enabled = False
-        
-        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9]
+        return [param0, param1, param2, param3]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -172,23 +107,6 @@ class LoadALARMData(object):
     def updateParameters(self, parameters):
         """Modify the values and properties of parameters before internal
         validation is performed."""
-        # Enable/disable aspect parameters based on filter type
-        if parameters[6].value:  # aspect_type
-            aspect_type = parameters[6].valueAsText
-            
-            if aspect_type == "Cardinal Directions":
-                parameters[7].enabled = True  # cardinal_dirs
-                parameters[8].enabled = False  # aspect_min
-                parameters[9].enabled = False  # aspect_max
-            elif aspect_type == "Degree Range":
-                parameters[7].enabled = False  # cardinal_dirs
-                parameters[8].enabled = True   # aspect_min
-                parameters[9].enabled = True   # aspect_max
-            else:  # "None"
-                parameters[7].enabled = False
-                parameters[8].enabled = False
-                parameters[9].enabled = False
-        
         return
 
     def updateMessages(self, parameters):
@@ -207,22 +125,8 @@ class LoadALARMData(object):
         data_types = [dt.strip().strip("'\"") for dt in parameters[2].valueAsText.split(';')]
         use_group = parameters[3].value
         
-        # Get filter parameters
-        elev_min = parameters[4].value
-        elev_max = parameters[5].value
-        aspect_type = parameters[6].valueAsText if parameters[6].value else "None"
-        cardinal_dirs = parameters[7].valueAsText.split(';') if parameters[7].value else []
-        cardinal_dirs = [d.strip().strip("'\"") for d in cardinal_dirs] if cardinal_dirs else []
-        aspect_min = parameters[8].value
-        aspect_max = parameters[9].value
-        
         arcpy.AddMessage(f"Loading data for {region}, Scenario {scenario_id}")
         arcpy.AddMessage(f"Data types to load: {data_types}")
-        
-        # Build filter query if filters are specified
-        filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max)
-        if filter_query:
-            arcpy.AddMessage(f"Applying filters: {filter_query}")
         
         # Find scenario directory
         scenario_dir = self._find_scenario_dir(region, scenario_id)
@@ -267,8 +171,8 @@ class LoadALARMData(object):
                 arcpy.AddMessage(f"Loading tracks: {tracks_file.name}")
                 layer = map_obj.addDataFromPath(str(tracks_file))
                 self._apply_tracks_symbology(layer)
-                if filter_query:
-                    layer.definitionQuery = filter_query
+                # Add spatial index for performance
+                arcpy.AddSpatialIndex_management(layer)
                 layers_added.append(layer)
             else:
                 arcpy.AddWarning("Tracks shapefile not found")
@@ -280,8 +184,8 @@ class LoadALARMData(object):
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
                 layer = map_obj.addDataFromPath(str(pra_file))
                 self._apply_pra_symbology(layer)
-                if filter_query:
-                    layer.definitionQuery = filter_query
+                # Add spatial index for performance
+                arcpy.AddSpatialIndex_management(layer)
                 layers_added.append(layer)
             else:
                 arcpy.AddWarning("PRA shapefile not found")
@@ -295,8 +199,8 @@ class LoadALARMData(object):
                     arcpy.AddMessage(f"Loading risk assessment: {risk_file.name}")
                     layer = map_obj.addDataFromPath(str(risk_file))
                     self._apply_risk_symbology(layer)
-                    if filter_query:
-                        layer.definitionQuery = filter_query
+                    # Add spatial index for performance
+                    arcpy.AddSpatialIndex_management(layer)
                     layers_added.append(layer)
                 else:
                     arcpy.AddWarning("Risk assessment shapefile not found")
@@ -326,53 +230,6 @@ class LoadALARMData(object):
         arcpy.AddMessage(f"Successfully loaded {len(layers_added)} layers")
         
         return
-
-    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max):
-        """Build SQL WHERE clause for filtering based on elevation and aspect."""
-        conditions = []
-        
-        # Elevation filter
-        if elev_min is not None:
-            conditions.append(f"elev_mean >= {elev_min}")
-        if elev_max is not None:
-            conditions.append(f"elev_mean <= {elev_max}")
-        
-        # Aspect filter
-        if aspect_type == "Cardinal Directions" and cardinal_dirs:
-            # Convert cardinal directions to degree ranges
-            aspect_conditions = []
-            cardinal_ranges = {
-                'N': [(337.5, 360), (0, 22.5)],
-                'NE': [(22.5, 67.5)],
-                'E': [(67.5, 112.5)],
-                'SE': [(112.5, 157.5)],
-                'S': [(157.5, 202.5)],
-                'SW': [(202.5, 247.5)],
-                'W': [(247.5, 292.5)],
-                'NW': [(292.5, 337.5)]
-            }
-            
-            for direction in cardinal_dirs:
-                if direction in cardinal_ranges:
-                    for range_tuple in cardinal_ranges[direction]:
-                        if len(range_tuple) == 2:
-                            aspect_conditions.append(f"(aspect_mea >= {range_tuple[0]} AND aspect_mea < {range_tuple[1]})")
-            
-            if aspect_conditions:
-                conditions.append(f"({' OR '.join(aspect_conditions)})")
-        
-        elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
-            # Handle wrapping around 0/360 degrees
-            if aspect_min <= aspect_max:
-                conditions.append(f"(aspect_mea >= {aspect_min} AND aspect_mea <= {aspect_max})")
-            else:
-                # Wraps around (e.g., 350 to 10 degrees)
-                conditions.append(f"(aspect_mea >= {aspect_min} OR aspect_mea <= {aspect_max})")
-        
-        # Combine all conditions
-        if conditions:
-            return " AND ".join(conditions)
-        return None
 
     def _get_completed_regions(self):
         """Get list of regions with merged data (completed or partial)."""
@@ -653,207 +510,228 @@ class UpdateOverview(object):
         return
 
 
-class ApplySymbology(object):
+class FilterLayers(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Apply Symbology"
-        self.description = "Apply standard ALARM symbology to selected layers"
+        self.label = "Filter Layers"
+        self.description = "Apply filters to ALARM layers (Tracks, PRAs, Risk Assessment)"
         self.canRunInBackground = False
 
     def getParameterInfo(self):
         """Define parameter definitions"""
         
-        # Parameter 0: Layer
+        # Parameter 0: Layers to filter (multi-select)
         param0 = arcpy.Parameter(
-            displayName="Layer",
-            name="layer",
-            datatype="GPLayer",
-            parameterType="Required",
-            direction="Input")
-        
-        # Parameter 1: Symbology type
-        param1 = arcpy.Parameter(
-            displayName="Symbology Type",
-            name="symbology_type",
+            displayName="Layers to Filter",
+            name="layers_to_filter",
             datatype="GPString",
             parameterType="Required",
+            direction="Input",
+            multiValue=True)
+        
+        param0.filter.type = "ValueList"
+        param0.filter.list = ["Tracks", "PRAs", "Risk Assessment"]
+        
+        # Parameter 1: Minimum Elevation (optional)
+        param1 = arcpy.Parameter(
+            displayName="Minimum Elevation (m)",
+            name="elev_min",
+            datatype="GPDouble",
+            parameterType="Optional",
             direction="Input")
         
-        param1.filter.type = "ValueList"
-        param1.filter.list = ["PPR Raster", "Tracks", "PRAs", "Risk Assessment"]
+        # Parameter 2: Maximum Elevation (optional)
+        param2 = arcpy.Parameter(
+            displayName="Maximum Elevation (m)",
+            name="elev_max",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
         
-        return [param0, param1]
+        # Parameter 3: Aspect Filter Type
+        param3 = arcpy.Parameter(
+            displayName="Aspect Filter Type",
+            name="aspect_type",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input")
+        
+        param3.filter.type = "ValueList"
+        param3.filter.list = ["None", "Cardinal Directions", "Degree Range"]
+        param3.value = "None"
+        
+        # Parameter 4: Cardinal Directions (multi-select)
+        param4 = arcpy.Parameter(
+            displayName="Cardinal Directions",
+            name="cardinal_dirs",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input",
+            multiValue=True)
+        
+        param4.filter.type = "ValueList"
+        param4.filter.list = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        param4.enabled = False
+        
+        # Parameter 5: Aspect Min (degrees)
+        param5 = arcpy.Parameter(
+            displayName="Aspect Min (degrees)",
+            name="aspect_min",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        param5.filter.type = "Range"
+        param5.filter.list = [0, 360]
+        param5.enabled = False
+        
+        # Parameter 6: Aspect Max (degrees)
+        param6 = arcpy.Parameter(
+            displayName="Aspect Max (degrees)",
+            name="aspect_max",
+            datatype="GPDouble",
+            parameterType="Optional",
+            direction="Input")
+        
+        param6.filter.type = "Range"
+        param6.filter.list = [0, 360]
+        param6.enabled = False
+        
+        return [param0, param1, param2, param3, param4, param5, param6]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed."""
+        """Modify the values and properties of parameters before internal validation is performed."""
+        # Enable/disable aspect parameters based on filter type
+        if parameters[3].value:  # aspect_type
+            aspect_type = parameters[3].valueAsText
+            
+            if aspect_type == "Cardinal Directions":
+                parameters[4].enabled = True  # cardinal_dirs
+                parameters[5].enabled = False  # aspect_min
+                parameters[6].enabled = False  # aspect_max
+            elif aspect_type == "Degree Range":
+                parameters[4].enabled = False  # cardinal_dirs
+                parameters[5].enabled = True   # aspect_min
+                parameters[6].enabled = True   # aspect_max
+            else:  # "None"
+                parameters[4].enabled = False
+                parameters[5].enabled = False
+                parameters[6].enabled = False
+        
         return
 
     def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool
-        parameter."""
+        """Modify the messages created by internal validation for each tool parameter."""
         return
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
         
-        layer = parameters[0].value
-        symbology_type = parameters[1].valueAsText
+        # Get parameters
+        layers_to_filter = [l.strip().strip("'\"") for l in parameters[0].valueAsText.split(';')]
+        elev_min = parameters[1].value
+        elev_max = parameters[2].value
+        aspect_type = parameters[3].valueAsText if parameters[3].value else "None"
+        cardinal_dirs = parameters[4].valueAsText.split(';') if parameters[4].value else []
+        cardinal_dirs = [d.strip().strip("'\"") for d in cardinal_dirs] if cardinal_dirs else []
+        aspect_min = parameters[5].value
+        aspect_max = parameters[6].value
         
-        arcpy.AddMessage(f"Applying {symbology_type} symbology to {layer.name}")
+        arcpy.AddMessage(f"Filtering layers: {', '.join(layers_to_filter)}")
         
-        # Apply appropriate symbology
-        if symbology_type == "PPR Raster":
-            self._apply_ppr_symbology(layer)
-        elif symbology_type == "Tracks":
-            self._apply_tracks_symbology(layer)
-        elif symbology_type == "PRAs":
-            self._apply_pra_symbology(layer)
-        elif symbology_type == "Risk Assessment":
-            self._apply_risk_symbology(layer)
+        # Build filter query
+        filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max)
         
-        arcpy.AddMessage("Symbology applied successfully!")
+        if not filter_query:
+            arcpy.AddWarning("No filters specified. No changes will be made.")
+            return
+        
+        arcpy.AddMessage(f"Filter query: {filter_query}")
+        
+        # Get current map
+        aprx = arcpy.mp.ArcGISProject("CURRENT")
+        map_obj = aprx.activeMap
+        
+        if not map_obj:
+            arcpy.AddError("No active map found. Please open a map in ArcGIS Pro.")
+            return
+        
+        # Apply filters to selected layers
+        layers_filtered = 0
+        for layer in map_obj.listLayers():
+            layer_name = layer.name.lower()
+            
+            # Check if this layer should be filtered
+            should_filter = False
+            if "Tracks" in layers_to_filter and "track" in layer_name:
+                should_filter = True
+            elif "PRAs" in layers_to_filter and "pra" in layer_name:
+                should_filter = True
+            elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
+                should_filter = True
+            
+            if should_filter:
+                try:
+                    layer.definitionQuery = filter_query
+                    arcpy.AddMessage(f"  Applied filter to: {layer.name}")
+                    layers_filtered += 1
+                except Exception as e:
+                    arcpy.AddWarning(f"  Could not filter {layer.name}: {e}")
+        
+        if layers_filtered == 0:
+            arcpy.AddWarning("No matching layers found in current map.")
+        else:
+            arcpy.AddMessage(f"Successfully filtered {layers_filtered} layer(s)")
         
         return
 
-    def _apply_ppr_symbology(self, layer):
-        """Apply PPR symbology."""
-        try:
-            sym = layer.symbology
-            if hasattr(sym, 'colorizer'):
-                if sym.colorizer.type != 'RasterClassifyColorizer':
-                    sym.updateColorizer('RasterClassifyColorizer')
-                
-                sym.colorizer.classificationField = "Value"
-                sym.colorizer.breakCount = 5
-                sym.colorizer.noDataColor = {'RGB': [0, 0, 0, 0]}
-                
-                breaks = [1, 10, 25, 50, 99999]
-                colors = [
-                    {'HSV': [186, 30, 98, 100]},   # light blue (0.1-1)
-                    {'HSV': [107, 49, 76, 100]},   # green (1-10)
-                    {'HSV': [28, 100, 66, 100]},    # orange (10-25)
-                    {'HSV': [310, 100, 55, 100]},   # purple (25-50)
-                    {'HSV': [320, 100, 39, 100]}    # darker purple (>50)
-                ]
-                labels = [
-                    "0.1 - 1 kPa",
-                    "1 - 10 kPa",
-                    "10 - 25 kPa",
-                    "25 - 50 kPa",
-                    "> 50 kPa"
-                ]
-                
-                arcpy.AddMessage(f"  PPR classBreaks available: {len(sym.colorizer.classBreaks)}")
-                
-                for i, brk in enumerate(sym.colorizer.classBreaks):
-                    if i < len(breaks):
-                        brk.upperBound = breaks[i]
-                        brk.color = colors[i]
-                        brk.label = labels[i]
-                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
-                
-                layer.symbology = sym
-                layer.transparency = 30
+    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max):
+        """Build SQL WHERE clause for filtering based on elevation and aspect."""
+        conditions = []
+        
+        # Elevation filter
+        if elev_min is not None:
+            conditions.append(f"elev_mean >= {elev_min}")
+        if elev_max is not None:
+            conditions.append(f"elev_mean <= {elev_max}")
+        
+        # Aspect filter
+        if aspect_type == "Cardinal Directions" and cardinal_dirs:
+            # Convert cardinal directions to degree ranges
+            aspect_conditions = []
+            cardinal_ranges = {
+                'N': [(337.5, 360), (0, 22.5)],
+                'NE': [(22.5, 67.5)],
+                'E': [(67.5, 112.5)],
+                'SE': [(112.5, 157.5)],
+                'S': [(157.5, 202.5)],
+                'SW': [(202.5, 247.5)],
+                'W': [(247.5, 292.5)],
+                'NW': [(292.5, 337.5)]
+            }
             
-            arcpy.AddMessage("Applied PPR symbology successfully")
-        except Exception as e:
-            arcpy.AddError(f"Error applying PPR symbology: {e}")
-
-    def _apply_tracks_symbology(self, layer):
-        """Apply tracks symbology."""
-        try:
-            sym = layer.symbology
-            if hasattr(sym, 'renderer'):
-                sym.updateRenderer('GraduatedColorsRenderer')
-                sym.renderer.classificationField = "med_pres"
-                sym.renderer.breakCount = 5
-                
-                breaks = [50, 100, 200, 500, 99999]
-                colors = [
-                    {'HSV': [207, 12, 100, 100]},   # very light blue (0-50)
-                    {'HSV': [207, 40, 100, 100]},   # light blue (50-100)
-                    {'HSV': [213, 70, 100, 100]},   # medium blue (100-200)
-                    {'HSV': [213, 100, 80, 100]},   # dark blue (200-500)
-                    {'HSV': [213, 100, 48, 100]}    # very dark blue (>500)
-                ]
-                labels = [
-                    "0 - 50 kPa",
-                    "50 - 100 kPa",
-                    "100 - 200 kPa",
-                    "200 - 500 kPa",
-                    "> 500 kPa"
-                ]
-                
-                arcpy.AddMessage(f"  Tracks classBreaks available: {len(sym.renderer.classBreaks)}")
-                
-                for i, brk in enumerate(sym.renderer.classBreaks):
-                    if i < len(breaks):
-                        brk.upperBound = breaks[i]
-                        brk.label = labels[i]
-                        brk.symbol.color = colors[i]
-                        brk.symbol.outlineColor = {'RGB': [0, 0, 0, 100]}
-                        brk.symbol.size = 1
-                        arcpy.AddMessage(f"  Set break {i}: upper={breaks[i]}, label={labels[i]}")
-                
-                layer.symbology = sym
-                layer.transparency = 10
+            for direction in cardinal_dirs:
+                if direction in cardinal_ranges:
+                    for range_tuple in cardinal_ranges[direction]:
+                        if len(range_tuple) == 2:
+                            aspect_conditions.append(f"(aspect_mea >= {range_tuple[0]} AND aspect_mea < {range_tuple[1]})")
             
-            arcpy.AddMessage("Applied tracks symbology successfully")
-        except Exception as e:
-            arcpy.AddError(f"Error applying tracks symbology: {e}")
-
-    def _apply_pra_symbology(self, layer):
-        """Apply PRA symbology."""
-        try:
-            sym = layer.symbology
-            sym.updateRenderer('SimpleRenderer')
-            symbol = sym.renderer.symbol
-            symbol.color = {'RGB': [0, 0, 0, 0]}
-            symbol.outlineColor = {'RGB': [0, 0, 0, 100]}
-            symbol.outlineWidth = 1.5
-            layer.symbology = sym
-            arcpy.AddMessage("Applied PRA symbology (black outline, no fill)")
-        except Exception as e:
-            arcpy.AddError(f"Error: {e}")
-
-    def _apply_risk_symbology(self, layer):
-        """Apply risk assessment symbology."""
-        try:
-            sym = layer.symbology
-            sym.updateRenderer('GraduatedColorsRenderer')
-            sym.renderer.classificationField = "max_ppr"
-            sym.renderer.breakCount = 5
-            
-            # First compute with EqualInterval to initialize breaks
-            sym.renderer.classificationMethod = "EqualInterval"
-            
-            # Now switch to Manual and set our custom breaks
-            sym.renderer.classificationMethod = "Manual"
-            
-            # Define breaks (upper bounds) and colors
-            breaks = [25, 50, 100, 200, 10000]
-            colors = [
-                {'RGB': [255, 179, 217, 100]},  # #ffb3d9 - light pink (0-25)
-                {'RGB': [255, 102, 179, 100]},  # #ff66b3 - pink (25-50)
-                {'RGB': [255, 0, 128, 100]},    # #ff0080 - magenta (50-100)
-                {'RGB': [204, 0, 102, 100]},    # #cc0066 - dark magenta (100-200)
-                {'RGB': [153, 0, 80, 100]}      # #990050 - very dark magenta (>200)
-            ]
-            
-            # Apply breaks and colors
-            for i in range(min(len(breaks), len(sym.renderer.classBreaks))):
-                sym.renderer.classBreaks[i].upperBound = breaks[i]
-                if i < len(colors):
-                    sym.renderer.classBreaks[i].symbol.color = colors[i]
-                    sym.renderer.classBreaks[i].label = f"{0 if i == 0 else breaks[i-1]} - {breaks[i]}"
-            
-            layer.symbology = sym
-            layer.transparency = 0
-            arcpy.AddMessage("Applied risk assessment symbology (magenta/pink scale, 100% opacity)")
-        except Exception as e:
-            arcpy.AddError(f"Error: {e}")
+            if aspect_conditions:
+                conditions.append(f"({' OR '.join(aspect_conditions)})")
+        
+        elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
+            # Handle wrapping around 0/360 degrees
+            if aspect_min <= aspect_max:
+                conditions.append(f"(aspect_mea >= {aspect_min} AND aspect_mea <= {aspect_max})")
+            else:
+                # Wraps around (e.g., 350 to 10 degrees)
+                conditions.append(f"(aspect_mea >= {aspect_min} OR aspect_mea <= {aspect_max})")
+        
+        # Combine all conditions
+        if conditions:
+            return " AND ".join(conditions)
+        return None

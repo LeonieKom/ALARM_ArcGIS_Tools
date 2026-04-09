@@ -1,0 +1,25 @@
+ANLEITUNG: Felder in Shapefiles checken
+=========================================
+
+Öffne ArcGIS Pro Python Window und führe aus:
+
+import arcpy
+from pathlib import Path
+
+# Tracks
+tracks = r"L:\ALARM\Results\Vest_Finnmark\merged\D\tracks_Vest_Finnmark_D_75-55_pxov150_rel2.3m.shp"
+print("TRACKS FIELDS:")
+for f in arcpy.ListFields(tracks):
+    print(f"  {f.name} ({f.type})")
+
+# PRAs
+pras = r"L:\ALARM\Results\Vest_Finnmark\merged\D\pra_Vest_Finnmark_D_75-55_pxov150_rel2.3m.shp"
+print("\nPRAs FIELDS:")
+for f in arcpy.ListFields(pras):
+    print(f"  {f.name} ({f.type})")
+
+# Risk Assessment
+risk = r"L:\ALARM\Results\Vest_Finnmark\merged\D\risk_assessment\risk_Vest_Finnmark_D_75-55_pxov150_rel2.3m.shp"
+print("\nRISK ASSESSMENT FIELDS:")
+for f in arcpy.ListFields(risk):
+    print(f"  {f.name} ({f.type})")
