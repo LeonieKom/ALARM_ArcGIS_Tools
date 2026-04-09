@@ -27,7 +27,7 @@ class Toolbox(object):
         self.description = "Tools for loading and managing ALARM regional avalanche data"
         
         # List of tool classes associated with this toolbox
-        self.tools = [LoadALARMData, FilterLayers, UpdateOverview]
+        self.tools = [LoadALARMData, FilterLayers, ExportFilteredData, GenerateReport, CompareScenarios, UpdateOverview]
 
 
 class LoadALARMData(object):
@@ -801,3 +801,506 @@ class FilterLayers(object):
         if conditions:
             return " AND ".join(conditions)
         return None
+
+
+class ExportFilteredData(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Export Filtered Data"
+        self.description = "Export filtered layers to new shapefiles"
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+        
+        # Parameter 0: Layer to export
+        param0 = arcpy.Parameter(
+            displayName="Layer to Export",
+            name="layer",
+            datatype="GPLayer",
+            parameterType="Required",
+            direction="Input")
+        
+        # Parameter 1: Output directory
+        param1 = arcpy.Parameter(
+            displayName="Output Directory",
+            name="output_dir",
+            datatype="DEFolder",
+            parameterType="Required",
+            direction="Input")
+        
+        # Parameter 2: Output filename (optional)
+        param2 = arcpy.Parameter(
+            displayName="Output Filename (optional)",
+            name="output_name",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input")
+        
+        param2.value = ""
+        
+        return [param0, param1, param2]
+
+    def isLicensed(self):
+        """Set whether tool is licensed to execute."""
+        return True
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal validation is performed."""
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool parameter."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        from datetime import datetime
+        
+        # Get parameters
+        layer = parameters[0].value
+        output_dir = parameters[1].valueAsText
+        output_name = parameters[2].valueAsText
+        
+        # Generate output filename
+        if not output_name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_name = f"{layer.name}_filtered_{timestamp}.shp"
+        elif not output_name.endswith('.shp'):
+            output_name += '.shp'
+        
+        output_path = os.path.join(output_dir, output_name)
+        
+        arcpy.AddMessage(f"Exporting layer: {layer.name}")
+        arcpy.AddMessage(f"Output: {output_path}")
+        
+        # Check if layer has definition query (filter)
+        if hasattr(layer, 'definitionQuery') and layer.definitionQuery:
+            arcpy.AddMessage(f"Active filter: {layer.definitionQuery}")
+        else:
+            arcpy.AddMessage("No filter active - exporting all features")
+        
+        try:
+            # Export the layer (respects definitionQuery automatically)
+            arcpy.conversion.FeatureClassToFeatureClass(
+                layer,
+                output_dir,
+                output_name
+            )
+            
+            # Count features
+            result = arcpy.management.GetCount(output_path)
+            count = int(result.getOutput(0))
+            
+            arcpy.AddMessage(f"Successfully exported {count} features to:")
+            arcpy.AddMessage(f"  {output_path}")
+            
+        except Exception as e:
+            arcpy.AddError(f"Export failed: {e}")
+        
+        return
+
+
+class GenerateReport(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Generate Report"
+        self.description = "Generate statistics report for Risk Assessment layer"
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+        
+        # Parameter 0: Risk Assessment Layer
+        param0 = arcpy.Parameter(
+            displayName="Risk Assessment Layer",
+            name="risk_layer",
+            datatype="GPLayer",
+            parameterType="Required",
+            direction="Input")
+        
+        # Parameter 1: Output directory
+        param1 = arcpy.Parameter(
+            displayName="Output Directory",
+            name="output_dir",
+            datatype="DEFolder",
+            parameterType="Required",
+            direction="Input")
+        
+        # Parameter 2: Report format
+        param2 = arcpy.Parameter(
+            displayName="Report Format",
+            name="report_format",
+            datatype="GPString",
+            parameterType="Required",
+            direction="Input")
+        
+        param2.filter.type = "ValueList"
+        param2.filter.list = ["HTML", "CSV", "Both"]
+        param2.value = "HTML"
+        
+        return [param0, param1, param2]
+
+    def isLicensed(self):
+        """Set whether tool is licensed to execute."""
+        return True
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal validation is performed."""
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool parameter."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        from datetime import datetime
+        from collections import defaultdict
+        
+        # Get parameters
+        layer = parameters[0].value
+        output_dir = parameters[1].valueAsText
+        report_format = parameters[2].valueAsText
+        
+        arcpy.AddMessage(f"Analyzing layer: {layer.name}")
+        
+        # Check if layer has definition query (filter)
+        if hasattr(layer, 'definitionQuery') and layer.definitionQuery:
+            arcpy.AddMessage(f"Active filter: {layer.definitionQuery}")
+        
+        # Collect statistics
+        stats = {
+            'total_count': 0,
+            'safety_class': defaultdict(int),
+            'ppr_categories': defaultdict(int),
+            'elevation_ranges': defaultdict(int),
+            'aspect_categories': defaultdict(int),
+            'max_ppr_values': [],
+            'mean_ppr_values': [],
+            'pra_elev_values': []
+        }
+        
+        try:
+            # Read all features
+            fields = ['saf_class', 'max_ppr', 'mean_ppr', 'pra_elev', 'pra_aspct']
+            
+            with arcpy.da.SearchCursor(layer, fields) as cursor:
+                for row in cursor:
+                    stats['total_count'] += 1
+                    
+                    # Safety class
+                    saf_class = row[0] if row[0] else 'Unknown'
+                    stats['safety_class'][saf_class] += 1
+                    
+                    # PPR categories
+                    max_ppr = row[1] if row[1] is not None else 0
+                    stats['max_ppr_values'].append(max_ppr)
+                    if max_ppr < 25:
+                        stats['ppr_categories']['0-25 kPa'] += 1
+                    elif max_ppr < 50:
+                        stats['ppr_categories']['25-50 kPa'] += 1
+                    elif max_ppr < 100:
+                        stats['ppr_categories']['50-100 kPa'] += 1
+                    elif max_ppr < 200:
+                        stats['ppr_categories']['100-200 kPa'] += 1
+                    else:
+                        stats['ppr_categories']['>200 kPa'] += 1
+                    
+                    # Mean PPR
+                    if row[2] is not None:
+                        stats['mean_ppr_values'].append(row[2])
+                    
+                    # Elevation ranges
+                    pra_elev = row[3] if row[3] is not None else 0
+                    stats['pra_elev_values'].append(pra_elev)
+                    if pra_elev < 500:
+                        stats['elevation_ranges']['<500m'] += 1
+                    elif pra_elev < 1000:
+                        stats['elevation_ranges']['500-1000m'] += 1
+                    elif pra_elev < 1500:
+                        stats['elevation_ranges']['1000-1500m'] += 1
+                    elif pra_elev < 2000:
+                        stats['elevation_ranges']['1500-2000m'] += 1
+                    else:
+                        stats['elevation_ranges']['>2000m'] += 1
+                    
+                    # Aspect categories (string field)
+                    aspect = row[4] if row[4] else 'Unknown'
+                    stats['aspect_categories'][aspect] += 1
+            
+            arcpy.AddMessage(f"Analyzed {stats['total_count']} buildings")
+            
+            # Generate reports
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            if report_format in ["HTML", "Both"]:
+                html_path = os.path.join(output_dir, f"risk_report_{timestamp}.html")
+                self._generate_html_report(stats, html_path, layer.name)
+                arcpy.AddMessage(f"HTML report: {html_path}")
+            
+            if report_format in ["CSV", "Both"]:
+                csv_path = os.path.join(output_dir, f"risk_report_{timestamp}.csv")
+                self._generate_csv_report(stats, csv_path)
+                arcpy.AddMessage(f"CSV report: {csv_path}")
+            
+        except Exception as e:
+            arcpy.AddError(f"Report generation failed: {e}")
+            import traceback
+            arcpy.AddError(traceback.format_exc())
+        
+        return
+
+    def _generate_html_report(self, stats, output_path, layer_name):
+        """Generate HTML report."""
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Risk Assessment Report - {layer_name}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+        h1 {{ color: #333; }}
+        h2 {{ color: #666; margin-top: 30px; }}
+        table {{ border-collapse: collapse; width: 100%; max-width: 600px; margin: 10px 0; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+        th {{ background-color: #4CAF50; color: white; }}
+        tr:nth-child(even) {{ background-color: #f2f2f2; }}
+        .summary {{ background-color: #e7f3fe; padding: 15px; border-left: 6px solid #2196F3; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <h1>Risk Assessment Report</h1>
+    <p><strong>Layer:</strong> {layer_name}</p>
+    <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+    
+    <div class="summary">
+        <h2>Summary</h2>
+        <p><strong>Total Buildings Analyzed:</strong> {stats['total_count']}</p>
+        <p><strong>Max PPR Range:</strong> {min(stats['max_ppr_values']) if stats['max_ppr_values'] else 0:.2f} - {max(stats['max_ppr_values']) if stats['max_ppr_values'] else 0:.2f} kPa</p>
+        <p><strong>Mean PPR Average:</strong> {sum(stats['mean_ppr_values'])/len(stats['mean_ppr_values']) if stats['mean_ppr_values'] else 0:.2f} kPa</p>
+        <p><strong>Elevation Range:</strong> {min(stats['pra_elev_values']) if stats['pra_elev_values'] else 0:.0f} - {max(stats['pra_elev_values']) if stats['pra_elev_values'] else 0:.0f} m</p>
+    </div>
+    
+    <h2>Buildings by Safety Class</h2>
+    <table>
+        <tr><th>Safety Class</th><th>Count</th><th>Percentage</th></tr>
+"""
+        for saf_class, count in sorted(stats['safety_class'].items()):
+            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+            html += f"        <tr><td>{saf_class}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
+        
+        html += """    </table>
+    
+    <h2>Buildings by PPR Category</h2>
+    <table>
+        <tr><th>PPR Range</th><th>Count</th><th>Percentage</th></tr>
+"""
+        ppr_order = ['0-25 kPa', '25-50 kPa', '50-100 kPa', '100-200 kPa', '>200 kPa']
+        for category in ppr_order:
+            count = stats['ppr_categories'].get(category, 0)
+            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+            html += f"        <tr><td>{category}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
+        
+        html += """    </table>
+    
+    <h2>Buildings by Elevation Range</h2>
+    <table>
+        <tr><th>Elevation Range</th><th>Count</th><th>Percentage</th></tr>
+"""
+        elev_order = ['<500m', '500-1000m', '1000-1500m', '1500-2000m', '>2000m']
+        for category in elev_order:
+            count = stats['elevation_ranges'].get(category, 0)
+            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+            html += f"        <tr><td>{category}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
+        
+        html += """    </table>
+    
+    <h2>Buildings by Aspect</h2>
+    <table>
+        <tr><th>Aspect</th><th>Count</th><th>Percentage</th></tr>
+"""
+        for aspect, count in sorted(stats['aspect_categories'].items()):
+            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+            html += f"        <tr><td>{aspect}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
+        
+        html += """    </table>
+</body>
+</html>
+"""
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+    def _generate_csv_report(self, stats, output_path):
+        """Generate CSV report."""
+        import csv
+        
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            # Summary
+            writer.writerow(['SUMMARY'])
+            writer.writerow(['Total Buildings', stats['total_count']])
+            writer.writerow(['Max PPR Min', min(stats['max_ppr_values']) if stats['max_ppr_values'] else 0])
+            writer.writerow(['Max PPR Max', max(stats['max_ppr_values']) if stats['max_ppr_values'] else 0])
+            writer.writerow(['Mean PPR Avg', sum(stats['mean_ppr_values'])/len(stats['mean_ppr_values']) if stats['mean_ppr_values'] else 0])
+            writer.writerow([])
+            
+            # Safety Class
+            writer.writerow(['SAFETY CLASS', 'Count', 'Percentage'])
+            for saf_class, count in sorted(stats['safety_class'].items()):
+                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+                writer.writerow([saf_class, count, f"{pct:.1f}%"])
+            writer.writerow([])
+            
+            # PPR Categories
+            writer.writerow(['PPR CATEGORY', 'Count', 'Percentage'])
+            ppr_order = ['0-25 kPa', '25-50 kPa', '50-100 kPa', '100-200 kPa', '>200 kPa']
+            for category in ppr_order:
+                count = stats['ppr_categories'].get(category, 0)
+                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+                writer.writerow([category, count, f"{pct:.1f}%"])
+            writer.writerow([])
+            
+            # Elevation
+            writer.writerow(['ELEVATION RANGE', 'Count', 'Percentage'])
+            elev_order = ['<500m', '500-1000m', '1000-1500m', '1500-2000m', '>2000m']
+            for category in elev_order:
+                count = stats['elevation_ranges'].get(category, 0)
+                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+                writer.writerow([category, count, f"{pct:.1f}%"])
+            writer.writerow([])
+            
+            # Aspect
+            writer.writerow(['ASPECT', 'Count', 'Percentage'])
+            for aspect, count in sorted(stats['aspect_categories'].items()):
+                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
+                writer.writerow([aspect, count, f"{pct:.1f}%"])
+
+
+class CompareScenarios(object):
+    def __init__(self):
+        """Define the tool (tool name is the name of the class)."""
+        self.label = "Compare Scenarios"
+        self.description = "Compare two scenarios visually with Swipe or Side-by-Side view"
+        self.canRunInBackground = False
+
+    def getParameterInfo(self):
+        """Define parameter definitions"""
+        
+        # Parameter 0: Comparison Mode
+        param0 = arcpy.Parameter(
+            displayName="Comparison Mode",
+            name="comparison_mode",
+            datatype="GPString",
+            parameterType="Required",
+            direction="Input")
+        
+        param0.filter.type = "ValueList"
+        param0.filter.list = ["Swipe Tool", "Side-by-Side Maps"]
+        param0.value = "Swipe Tool"
+        
+        # Parameter 1: Layer 1
+        param1 = arcpy.Parameter(
+            displayName="Layer 1 (Left/Top)",
+            name="layer1",
+            datatype="GPLayer",
+            parameterType="Required",
+            direction="Input")
+        
+        # Parameter 2: Layer 2
+        param2 = arcpy.Parameter(
+            displayName="Layer 2 (Right/Bottom)",
+            name="layer2",
+            datatype="GPLayer",
+            parameterType="Required",
+            direction="Input")
+        
+        return [param0, param1, param2]
+
+    def isLicensed(self):
+        """Set whether tool is licensed to execute."""
+        return True
+
+    def updateParameters(self, parameters):
+        """Modify the values and properties of parameters before internal validation is performed."""
+        return
+
+    def updateMessages(self, parameters):
+        """Modify the messages created by internal validation for each tool parameter."""
+        return
+
+    def execute(self, parameters, messages):
+        """The source code of the tool."""
+        
+        # Get parameters
+        comparison_mode = parameters[0].valueAsText
+        layer1 = parameters[1].value
+        layer2 = parameters[2].value
+        
+        arcpy.AddMessage(f"Comparison mode: {comparison_mode}")
+        arcpy.AddMessage(f"Layer 1: {layer1.name}")
+        arcpy.AddMessage(f"Layer 2: {layer2.name}")
+        
+        try:
+            if comparison_mode == "Swipe Tool":
+                self._setup_swipe(layer1, layer2)
+            else:
+                self._setup_side_by_side(layer1, layer2)
+                
+        except Exception as e:
+            arcpy.AddError(f"Comparison setup failed: {e}")
+            import traceback
+            arcpy.AddError(traceback.format_exc())
+        
+        return
+
+    def _setup_swipe(self, layer1, layer2):
+        """Setup swipe tool for two layers."""
+        arcpy.AddMessage("\nSetting up Swipe Tool:")
+        arcpy.AddMessage("1. Both layers are now visible in your map")
+        arcpy.AddMessage("2. To enable Swipe:")
+        arcpy.AddMessage("   - Go to 'Map' tab → 'Exploratory Analysis' → 'Swipe'")
+        arcpy.AddMessage(f"   - Select '{layer2.name}' as the swipe layer")
+        arcpy.AddMessage(f"   - '{layer1.name}' will be visible on the other side")
+        arcpy.AddMessage("3. Drag the swipe line to compare the layers")
+        
+        # Ensure both layers are visible
+        layer1.visible = True
+        layer2.visible = True
+        
+        # Get current map and zoom to combined extent
+        aprx = arcpy.mp.ArcGISProject("CURRENT")
+        map_obj = aprx.activeMap
+        
+        # Get map view
+        map_view = aprx.activeView
+        if map_view:
+            # Zoom to layer1 extent
+            map_view.camera.setExtent(map_view.getLayerExtent(layer1))
+        
+        arcpy.AddMessage("\n✓ Layers prepared for swipe comparison")
+
+    def _setup_side_by_side(self, layer1, layer2):
+        """Setup side-by-side comparison (requires manual map frame setup)."""
+        arcpy.AddMessage("\nSide-by-Side comparison setup:")
+        arcpy.AddMessage("This mode requires manual setup in ArcGIS Pro Layout view:")
+        arcpy.AddMessage("\n1. Create a new Layout:")
+        arcpy.AddMessage("   - Insert → New Layout → Choose size")
+        arcpy.AddMessage("\n2. Add two Map Frames:")
+        arcpy.AddMessage("   - Insert → Map Frame → Select your map (twice)")
+        arcpy.AddMessage("   - Position them side-by-side")
+        arcpy.AddMessage("\n3. In each Map Frame:")
+        arcpy.AddMessage(f"   - Left frame: Show only '{layer1.name}'")
+        arcpy.AddMessage(f"   - Right frame: Show only '{layer2.name}'")
+        arcpy.AddMessage("   - Right-click frame → Properties → Extent → Link to same extent")
+        arcpy.AddMessage("\n4. Synchronize extents:")
+        arcpy.AddMessage("   - Right-click one frame → Activate")
+        arcpy.AddMessage("   - Navigate to desired extent")
+        arcpy.AddMessage("   - Both frames will update if linked")
+        
+        # Ensure both layers are visible
+        layer1.visible = True
+        layer2.visible = True
+        
+        arcpy.AddMessage("\n✓ Layers are visible and ready for side-by-side comparison")
