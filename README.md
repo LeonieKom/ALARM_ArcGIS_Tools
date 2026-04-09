@@ -4,12 +4,15 @@ ArcGIS Pro Python Toolbox for working with ALARM (Avalanche Risk Assessment) pip
 
 ## Overview
 
-This toolbox provides easy access to ALARM pipeline outputs directly within ArcGIS Pro, with automatic symbology application and data management tools.
+This toolbox provides easy access to ALARM pipeline outputs directly within ArcGIS Pro, with automatic symbology application, advanced filtering, data export, reporting, and scenario comparison tools.
 
 **Features:**
 - **Load ALARM Data**: Load region/scenario data with automatic symbology
+- **Filter Layers**: Apply advanced filters to Tracks, PRAs, and Risk Assessment layers
+- **Export Filtered Data**: Export filtered layers as new shapefiles
+- **Generate Report**: Create detailed statistics reports for Risk Assessment data
+- **Compare Scenarios**: Visual comparison of two scenarios using Swipe or Side-by-Side views
 - **Update Overview**: Regenerate HTML overview page
-- **Apply Symbology**: Apply standard ALARM symbology to selected layers
 
 ## Installation
 
@@ -44,24 +47,143 @@ For permanent access:
 Loads data for a specific region and scenario with automatic symbology.
 
 **Parameters:**
-- **Region**: Select from available regions (e.g., Finnmarkskysten, Oslo)
-- **Scenario**: Select scenario (A, B, C, D, E, or All)
-- **Layers to Load**: Choose which layers to add (PPR, Tracks, PRAs, Risk Assessment)
+- **Region**: Select from available regions (e.g., Vest_Finnmark, Nord_Troms)
+- **Scenario**: Select scenario (A, B, C, D, E)
+- **Data Types**: Choose which layers to load (PPR Raster, Tracks, PRAs, Risk Assessment)
+- **Add to Group Layer**: Organize layers in a group (default: Yes)
 
 **What it does:**
 - Finds data in `L:\ALARM\Results\{region}\merged\{scenario}\`
 - Loads selected layers into current map
 - Applies standard ALARM symbology automatically
+- Adds spatial index for performance optimization
 
 **Example:**
 ```
-Region: Finnmarkskysten
-Scenario: A
-Layers: PPR Raster, Tracks, Risk Assessment
-→ Loads 3 layers with correct symbology
+Region: Vest_Finnmark
+Scenario: D
+Data Types: Tracks, Risk Assessment
+→ Loads 2 layers with correct symbology in a group
 ```
 
-### 2. Update Overview
+### 2. Filter Layers
+
+**Tool:** `Filter Layers`
+
+Apply advanced filters to loaded layers based on elevation, aspect, safety class, and pressure.
+
+**Parameters:**
+- **Layers to Filter**: Multi-select (Tracks, PRAs, Risk Assessment)
+- **Elevation**: Min/Max range (meters)
+- **Aspect Filter Type**: None, Cardinal Directions, or Degree Range
+  - **Cardinal Directions**: Multi-select (N, NE, E, SE, S, SW, W, NW)
+  - **Degree Range**: Min/Max (0-360°)
+- **Building Safety Class** (Risk Assessment only): S1, S2, S3, S4
+- **Minimum Max PPR** (Risk Assessment only): Threshold in kPa
+
+**What it does:**
+- Applies SQL definition queries to selected layers
+- Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, PRAs: `elev_med`/`aspect_deg`, Risk: `pra_elev`)
+- Filters are cumulative (AND logic)
+- Shows applied query in messages
+
+**Example:**
+```
+Layers: Risk Assessment
+Elevation: 500-1500m
+Safety Class: S3, S4
+Min Max PPR: 25 kPa
+→ Shows only high-risk buildings (S3/S4) between 500-1500m with PPR ≥ 25 kPa
+```
+
+### 3. Export Filtered Data
+
+**Tool:** `Export Filtered Data`
+
+Export filtered layers to new shapefiles for further analysis.
+
+**Parameters:**
+- **Layer to Export**: Select from current map
+- **Output Directory**: Where to save the shapefile
+- **Output Filename** (optional): Custom name (auto-generated if empty)
+
+**What it does:**
+- Exports only visible/filtered features (respects `definitionQuery`)
+- Auto-generates filename with timestamp if not specified
+- Reports number of exported features
+
+**Example:**
+```
+Layer: risk_Vest_Finnmark_D (filtered to S3/S4)
+Output: C:\Users\...\exports\
+Filename: high_risk_buildings.shp
+→ Exports 47 features to high_risk_buildings.shp
+```
+
+### 4. Generate Report
+
+**Tool:** `Generate Report`
+
+Generate detailed statistics report for Risk Assessment layer.
+
+**Parameters:**
+- **Risk Assessment Layer**: Select from current map
+- **Output Directory**: Where to save the report
+- **Report Format**: HTML, CSV, or Both
+
+**What it does:**
+- Analyzes all features (or filtered subset)
+- Generates statistics:
+  - Total building count
+  - Distribution by Safety Class (S1, S2, S3, S4)
+  - Distribution by PPR categories (0-25, 25-50, 50-100, 100-200, >200 kPa)
+  - Distribution by Elevation ranges (<500m, 500-1000m, 1000-1500m, 1500-2000m, >2000m)
+  - Distribution by Aspect (N, NE, E, SE, S, SW, W, NW)
+  - Min/Max/Average PPR values
+- Creates formatted HTML report with tables and percentages
+- Optional CSV export for further analysis
+
+**Example:**
+```
+Layer: risk_Vest_Finnmark_D
+Format: HTML
+→ Creates risk_report_20260409_123045.html with full statistics
+```
+
+### 5. Compare Scenarios
+
+**Tool:** `Compare Scenarios`
+
+Visually compare two scenarios using Swipe or Side-by-Side views.
+
+**Parameters:**
+- **Comparison Mode**: Swipe Tool or Side-by-Side Maps
+- **Layer 1** (Left/Top): First scenario layer
+- **Layer 2** (Right/Bottom): Second scenario layer
+
+**What it does:**
+
+**Swipe Tool Mode:**
+- Makes both layers visible
+- Provides instructions for activating ArcGIS Pro Swipe tool
+- Synchronizes extent to Layer 1
+- Allows interactive comparison with draggable swipe line
+
+**Side-by-Side Mode:**
+- Makes both layers visible
+- Provides detailed instructions for Layout setup
+- Guides user through creating two synchronized map frames
+
+**Example:**
+```
+Mode: Swipe Tool
+Layer 1: tracks_Vest_Finnmark_D
+Layer 2: tracks_Vest_Finnmark_E
+→ Prepares layers for swipe comparison
+→ Follow on-screen instructions to activate Swipe tool
+```
+
+### 6. Update Overview
 
 **Tool:** `Update Overview`
 
@@ -76,21 +198,6 @@ Regenerates the HTML overview page with thumbnails and statistics.
 - After new regions are processed
 - To update statistics
 - To regenerate thumbnails
-
-### 3. Apply Symbology
-
-**Tool:** `Apply Symbology`
-
-Applies standard ALARM symbology to selected layers in the current map.
-
-**Parameters:**
-- **Layer**: Select layer from current map
-- **Layer Type**: PPR Raster, Tracks, PRAs, or Risk Assessment
-
-**What it does:**
-- Detects layer type automatically (if possible)
-- Applies predefined symbology
-- Updates layer in current map
 
 ## Symbology Reference
 
