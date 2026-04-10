@@ -27,7 +27,7 @@ class Toolbox(object):
         self.description = "Tools for loading and managing ALARM regional avalanche data"
         
         # List of tool classes associated with this toolbox
-        self.tools = [LoadALARMData, FilterLayers, ExportFilteredData, GenerateReport, CompareScenarios, UpdateOverview]
+        self.tools = [LoadALARMData, FilterLayers, GenerateReport, ExportFilteredData, CompareScenarios, UpdateOverview]
 
 
 class LoadALARMData(object):

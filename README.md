@@ -9,8 +9,8 @@ This toolbox provides easy access to ALARM pipeline outputs directly within ArcG
 **Features:**
 - **Load ALARM Data**: Load region/scenario data with automatic symbology
 - **Filter Layers**: Apply advanced filters to Tracks, PRAs, and Risk Assessment layers
-- **Export Filtered Data**: Export filtered layers as new shapefiles
 - **Generate Report**: Create detailed statistics reports for Risk Assessment data
+- **Export Filtered Data**: Export filtered layers as new shapefiles
 - **Compare Scenarios**: Visual comparison of two scenarios using Swipe or Side-by-Side views
 - **Update Overview**: Regenerate HTML overview page
 
@@ -98,31 +98,7 @@ Min Max PPR: 25 kPa
 → Shows only high-risk buildings (S3/S4) between 500-1500m with PPR ≥ 25 kPa
 ```
 
-### 3. Export Filtered Data
-
-**Tool:** `Export Filtered Data`
-
-Export filtered layers to new shapefiles for further analysis.
-
-**Parameters:**
-- **Layer to Export**: Select from current map
-- **Output Directory**: Where to save the shapefile
-- **Output Filename** (optional): Custom name (auto-generated if empty)
-
-**What it does:**
-- Exports only visible/filtered features (respects `definitionQuery`)
-- Auto-generates filename with timestamp if not specified
-- Reports number of exported features
-
-**Example:**
-```
-Layer: risk_Vest_Finnmark_D (filtered to S3/S4)
-Output: C:\Users\...\exports\
-Filename: high_risk_buildings.shp
-→ Exports 47 features to high_risk_buildings.shp
-```
-
-### 4. Generate Report
+### 3. Generate Report
 
 **Tool:** `Generate Report`
 
@@ -150,6 +126,30 @@ Generate detailed statistics report for Risk Assessment layer.
 Layer: risk_Vest_Finnmark_D
 Format: HTML
 → Creates risk_report_20260409_123045.html with full statistics
+```
+
+### 4. Export Filtered Data
+
+**Tool:** `Export Filtered Data`
+
+Export filtered layers to new shapefiles for further analysis.
+
+**Parameters:**
+- **Layer to Export**: Select from current map
+- **Output Directory**: Where to save the shapefile
+- **Output Filename** (optional): Custom name (auto-generated if empty)
+
+**What it does:**
+- Exports only visible/filtered features (respects `definitionQuery`)
+- Auto-generates filename with timestamp if not specified
+- Reports number of exported features
+
+**Example:**
+```
+Layer: risk_Vest_Finnmark_D (filtered to S3/S4)
+Output: C:\Users\...\exports\
+Filename: high_risk_buildings.shp
+-> Exports 47 features to high_risk_buildings.shp
 ```
 
 ### 5. Compare Scenarios
