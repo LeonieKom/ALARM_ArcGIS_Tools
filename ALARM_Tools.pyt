@@ -22,7 +22,7 @@ import sys
 class Toolbox(object):
     def __init__(self):
         """Define the toolbox (the name of the toolbox is the name of the .pyt file)."""
-        self.label = "ALARM Tools"
+        self.label = "ALARM Tools v2"
         self.alias = "ALARM"
         self.description = "Tools for loading and managing ALARM regional avalanche data"
         
