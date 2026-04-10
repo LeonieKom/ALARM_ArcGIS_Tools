@@ -33,7 +33,7 @@ class Toolbox(object):
 class LoadALARMData(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Load ALARM Data"
+        self.label = "1. Load ALARM Data"
         self.description = "Load ALARM data for a specific region and scenario into the current map"
         self.canRunInBackground = False
         
@@ -465,7 +465,7 @@ class LoadALARMData(object):
 class UpdateOverview(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Update Overview"
+        self.label = "6. Update Overview"
         self.description = "Regenerate HTML overview page with latest data"
         self.canRunInBackground = False
 
@@ -557,7 +557,7 @@ class UpdateOverview(object):
 class FilterLayers(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Filter Layers"
+        self.label = "2. Filter Layers"
         self.description = "Apply filters to ALARM layers (Tracks, PRAs, Risk Assessment). PRAs must be loaded via LoadALARMData tool for filtering to work."
         self.canRunInBackground = False
 
@@ -864,7 +864,7 @@ class FilterLayers(object):
 class ExportFilteredData(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Export Filtered Data"
+        self.label = "4. Export Filtered Data"
         self.description = "Export filtered layers to new shapefiles"
         self.canRunInBackground = False
 
@@ -962,7 +962,7 @@ class ExportFilteredData(object):
 class GenerateReport(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Generate Report"
+        self.label = "3. Generate Report"
         self.description = "Generate statistics report for Risk Assessment layer"
         self.canRunInBackground = False
 
@@ -1265,7 +1265,7 @@ class GenerateReport(object):
 class CompareScenarios(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
-        self.label = "Compare Scenarios"
+        self.label = "5. Compare Scenarios"
         self.description = "Compare two scenarios visually with Swipe or Side-by-Side view"
         self.canRunInBackground = False
 
