@@ -177,12 +177,37 @@ class LoadALARMData(object):
             else:
                 arcpy.AddWarning("Tracks shapefile not found")
         
-        # Load PRAs
+        # Load PRAs - Convert to File Geodatabase to fix String field types
         if "PRAs" in data_types:
             pra_file = self._find_file(scenario_dir, "pra_*.shp")
             if pra_file:
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
-                layer = map_obj.addDataFromPath(str(pra_file))
+                arcpy.AddMessage("  Converting to File Geodatabase (fixes String field types for filtering)...")
+                
+                # Create in-memory workspace or use default geodatabase
+                aprx = arcpy.mp.ArcGISProject("CURRENT")
+                gdb_path = aprx.defaultGeodatabase
+                
+                # Generate feature class name
+                fc_name = f"pra_{region}_{scenario_id}".replace("-", "_").replace(".", "_")
+                fc_path = os.path.join(gdb_path, fc_name)
+                
+                # Delete if exists
+                if arcpy.Exists(fc_path):
+                    arcpy.Delete_management(fc_path)
+                
+                # Convert shapefile to geodatabase feature class
+                # This automatically converts String fields to appropriate numeric types
+                arcpy.conversion.FeatureClassToFeatureClass(
+                    str(pra_file), 
+                    gdb_path, 
+                    fc_name
+                )
+                
+                arcpy.AddMessage(f"  Converted to: {fc_path}")
+                
+                # Load from geodatabase instead of shapefile
+                layer = map_obj.addDataFromPath(fc_path)
                 self._apply_pra_symbology(layer)
                 # Add spatial index for performance
                 arcpy.AddSpatialIndex_management(layer)
@@ -533,7 +558,7 @@ class FilterLayers(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "Filter Layers"
-        self.description = "Apply filters to ALARM layers (Tracks, Risk Assessment). Note: PRAs cannot be filtered due to String field types."
+        self.description = "Apply filters to ALARM layers (Tracks, PRAs, Risk Assessment). PRAs must be loaded via LoadALARMData tool for filtering to work."
         self.canRunInBackground = False
 
     def getParameterInfo(self):
@@ -549,7 +574,7 @@ class FilterLayers(object):
             multiValue=True)
         
         param0.filter.type = "ValueList"
-        param0.filter.list = ["Tracks", "Risk Assessment"]  # PRAs removed - String fields cannot be filtered
+        param0.filter.list = ["Tracks", "PRAs", "Risk Assessment"]  # PRAs now supported via File Geodatabase conversion
         
         # Parameter 1: Minimum Elevation (optional)
         param1 = arcpy.Parameter(
@@ -707,6 +732,10 @@ class FilterLayers(object):
             if "Tracks" in layers_to_filter and "track" in layer_name:
                 # Tracks: pra_elev, pra_aspdeg
                 filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "pra_elev", "pra_aspdeg")
+                
+            elif "PRAs" in layers_to_filter and "pra_" in layer_name and "track" not in layer_name:
+                # PRAs: elev_med, aspect_deg (now numeric after File Geodatabase conversion)
+                filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
                 
             elif "Risk Assessment" in layers_to_filter and "risk" in layer_name:
                 # Risk Assessment: pra_elev, pra_aspct (but aspect is string, skip aspect filter)
@@ -1054,9 +1083,35 @@ class GenerateReport(object):
                     else:
                         stats['elevation_ranges']['>2000m'] += 1
                     
-                    # Aspect categories (string field)
-                    aspect = row[4] if row[4] else 'Unknown'
-                    stats['aspect_categories'][aspect] += 1
+                    # Aspect categories (pra_aspct is String field with cardinal directions)
+                    aspect_str = row[4] if row[4] else 'Unknown'
+                    # Map string aspect to cardinal direction
+                    if aspect_str and aspect_str != 'Unknown':
+                        try:
+                            # If it's a numeric string, convert to cardinal direction
+                            aspect_deg = float(aspect_str)
+                            if aspect_deg >= 337.5 or aspect_deg < 22.5:
+                                cardinal = 'N'
+                            elif aspect_deg < 67.5:
+                                cardinal = 'NE'
+                            elif aspect_deg < 112.5:
+                                cardinal = 'E'
+                            elif aspect_deg < 157.5:
+                                cardinal = 'SE'
+                            elif aspect_deg < 202.5:
+                                cardinal = 'S'
+                            elif aspect_deg < 247.5:
+                                cardinal = 'SW'
+                            elif aspect_deg < 292.5:
+                                cardinal = 'W'
+                            else:
+                                cardinal = 'NW'
+                            stats['aspect_categories'][cardinal] += 1
+                        except (ValueError, TypeError):
+                            # If it's already a cardinal direction string, use it
+                            stats['aspect_categories'][aspect_str] += 1
+                    else:
+                        stats['aspect_categories']['Unknown'] += 1
             
             arcpy.AddMessage(f"Analyzed {stats['total_count']} buildings")
             
