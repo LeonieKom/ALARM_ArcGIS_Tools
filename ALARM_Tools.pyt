@@ -752,11 +752,18 @@ class FilterLayers(object):
             arcpy.AddError("No active map found. Please open a map in ArcGIS Pro.")
             return
 
-        # Resolve the selected layers in the active map
-        map_layers = {}
+        # Resolve the selected layers in the active map. For layers inside a group
+        # ArcGIS passes the long name ("Group\\Layer"), so match on that first and
+        # fall back to the short name.
+        by_long_name = {}
+        by_short_name = {}
         for lyr in map_obj.listLayers():
             if lyr.isFeatureLayer:
-                map_layers.setdefault(lyr.name, []).append(lyr)
+                by_long_name.setdefault(lyr.longName, []).append(lyr)
+                by_short_name.setdefault(lyr.name, []).append(lyr)
+        map_layers = by_long_name
+        for key, lyrs in by_short_name.items():
+            map_layers.setdefault(key, lyrs)
 
         layers_filtered = 0
         for name in layer_names:
