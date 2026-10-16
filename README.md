@@ -91,6 +91,8 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
   - *Replace existing filter*: the old filter is discarded
   - *Reset filter*: removes the filter from the selected layers
 - With refinement the messages show total / before / now feature counts
+- **Show feature counts** can be switched off: counting reads each layer completely and takes seconds per large layer on `L:` (about 16 s for three Vest_Finnmark layers vs. 0.2 s without)
+- Aspect on Risk Assessment works with Cardinal Directions (matched against `pra_aspct`); a degree range is not available there
 - Shows applied query and feature counts (before -> after) in messages
 
 **Example:**

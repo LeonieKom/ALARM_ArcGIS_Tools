@@ -614,7 +614,17 @@ class FilterLayers(object):
         param9.filter.list = [self.MODE_REFINE, self.MODE_REPLACE, self.MODE_RESET]
         param9.value = self.MODE_REFINE
 
-        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9]
+        # Parameter 10: count features (informational, slower on big layers)
+        param10 = arcpy.Parameter(
+            displayName="Show feature counts (slower for large layers)",
+            name="count_features",
+            datatype="GPBoolean",
+            parameterType="Optional",
+            direction="Input")
+
+        param10.value = True
+
+        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -661,6 +671,7 @@ class FilterLayers(object):
         saf_classes = [s.strip().strip("'\"") for s in saf_classes] if saf_classes else []
         min_max_ppr = parameters[8].value
         mode = parameters[9].valueAsText or self.MODE_REFINE
+        count_features = bool(parameters[10].value) if parameters[10].value is not None else True
         reset = mode == self.MODE_RESET
         refine = mode == self.MODE_REFINE
 
@@ -707,9 +718,10 @@ class FilterLayers(object):
                 elif layer_type == "pras":
                     filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
                 elif layer_type == "risk":
-                    if aspect_type != "None":
-                        arcpy.AddWarning(f"  {layer.name}: aspect filter is not supported for Risk Assessment (text field) - ignored")
-                    filter_query = self._build_risk_filter_query(elev_min, elev_max, saf_classes, min_max_ppr)
+                    if aspect_type == "Degree Range":
+                        arcpy.AddWarning(f"  {layer.name}: a degree range is not supported for Risk Assessment (aspect is stored as N/NE/...) - use Cardinal Directions")
+                    risk_dirs = cardinal_dirs if aspect_type == "Cardinal Directions" else []
+                    filter_query = self._build_risk_filter_query(elev_min, elev_max, saf_classes, min_max_ppr, risk_dirs)
                 else:
                     arcpy.AddWarning(f"  {layer.name}: not recognised as Tracks, PRAs or Risk Assessment - skipped")
                     continue
@@ -728,27 +740,30 @@ class FilterLayers(object):
                     if refine and previous_query:
                         filter_query = f"({previous_query}) AND ({filter_query})"
 
-                    # Count with a temporary layer. The layer is used instead of its
-                    # dataSource path, because paths with dots are not resolvable.
-                    layer.definitionQuery = ""
-                    total = int(arcpy.management.GetCount(layer)[0])
-                    before = total
-                    if previous_query:
-                        before = self._count(layer, previous_query)
+                    # Counting reads the whole layer, which is slow for big shapefiles on L:,
+                    # so it is optional. The layer is used (not its dataSource path):
+                    # paths with dots in the file name are not resolvable.
+                    total = before = None
+                    if count_features:
+                        layer.definitionQuery = ""
+                        total = before = self._count(layer)
+                        if previous_query:
+                            layer.definitionQuery = previous_query
+                            before = self._count(layer)
 
                     layer.definitionQuery = filter_query
                     action = "Refined" if (refine and previous_query) else "Applied"
                     arcpy.AddMessage(f"  {action} filter on: {layer.name} ({layer_type})")
                     arcpy.AddMessage(f"    Query: {filter_query}")
 
-                    matched = self._count(layer, filter_query)
-                    if previous_query and refine:
-                        arcpy.AddMessage(f"    Features: {total} total | {before} before | {matched} now")
-                    else:
-                        arcpy.AddMessage(f"    Features: {total} -> {matched}")
-
-                    if matched == 0:
-                        arcpy.AddWarning(f"    Filter matches 0 features for {layer.name} - too restrictive?")
+                    if count_features:
+                        matched = self._count(layer)
+                        if previous_query and refine:
+                            arcpy.AddMessage(f"    Features: {total} total | {before} before | {matched} now")
+                        else:
+                            arcpy.AddMessage(f"    Features: {total} -> {matched}")
+                        if matched == 0:
+                            arcpy.AddWarning(f"    Filter matches 0 features for {layer.name} - too restrictive?")
                     layers_filtered += 1
                 except Exception as e:
                     arcpy.AddWarning(f"  Failed to apply filter to {layer.name}: {e}")
@@ -762,13 +777,9 @@ class FilterLayers(object):
 
         return
 
-    def _count(self, layer, query):
-        """Number of features of a layer matching a query (the layer, not its path, is used)."""
-        tmp = arcpy.management.MakeFeatureLayer(layer, "alarm_filter_tmp", query)
-        try:
-            return int(arcpy.management.GetCount(tmp)[0])
-        finally:
-            arcpy.management.Delete(tmp)
+    def _count(self, layer):
+        """Number of features the layer currently shows (respects its definition query)."""
+        return int(arcpy.management.GetCount(layer)[0])
 
     def _detect_layer_type(self, layer):
         """Identify an ALARM layer by its fields: 'tracks', 'pras', 'risk' or None."""
@@ -811,25 +822,7 @@ class FilterLayers(object):
         # Aspect filter (only if aspect_field is provided and numeric)
         if aspect_field:
             if aspect_type == "Cardinal Directions" and cardinal_dirs:
-                # Convert cardinal directions to degree ranges
-                aspect_conditions = []
-                cardinal_ranges = {
-                    'N': [(337.5, 360), (0, 22.5)],
-                    'NE': [(22.5, 67.5)],
-                    'E': [(67.5, 112.5)],
-                    'SE': [(112.5, 157.5)],
-                    'S': [(157.5, 202.5)],
-                    'SW': [(202.5, 247.5)],
-                    'W': [(247.5, 292.5)],
-                    'NW': [(292.5, 337.5)]
-                }
-
-                for direction in cardinal_dirs:
-                    if direction in cardinal_ranges:
-                        for range_tuple in cardinal_ranges[direction]:
-                            if len(range_tuple) == 2:
-                                aspect_conditions.append(f"({aspect_field} >= {range_tuple[0]} AND {aspect_field} < {range_tuple[1]})")
-
+                aspect_conditions = self._cardinal_conditions(aspect_field, cardinal_dirs)
                 if aspect_conditions:
                     conditions.append(f"({' OR '.join(aspect_conditions)})")
 
@@ -846,13 +839,45 @@ class FilterLayers(object):
             return " AND ".join(conditions)
         return None
 
-    def _build_risk_filter_query(self, elev_min, elev_max, saf_classes, min_max_ppr):
+    # Aspect classes as degree ranges [from, to)
+    CARDINAL_RANGES = {
+        'N': [(337.5, 360), (0, 22.5)],
+        'NE': [(22.5, 67.5)],
+        'E': [(67.5, 112.5)],
+        'SE': [(112.5, 157.5)],
+        'S': [(157.5, 202.5)],
+        'SW': [(202.5, 247.5)],
+        'W': [(247.5, 292.5)],
+        'NW': [(292.5, 337.5)]
+    }
+
+    def _cardinal_conditions(self, field, directions):
+        """SQL conditions for the given cardinal directions on a numeric aspect field.
+
+        Neighbouring directions are merged into one range (N + NE + E -> 337.5-360 and 0-112.5),
+        which keeps the query short. 360 itself is included in the upper range.
+        """
+        ranges = sorted(r for d in directions for r in self.CARDINAL_RANGES.get(d, []))
+        merged = []
+        for lo, hi in ranges:
+            if merged and merged[-1][1] == lo:
+                merged[-1] = (merged[-1][0], hi)
+            else:
+                merged.append((lo, hi))
+        conditions = []
+        for lo, hi in merged:
+            upper = f"{field} <= {hi}" if hi >= 360 else f"{field} < {hi}"
+            conditions.append(f"({field} >= {lo} AND {upper})")
+        return conditions
+
+    def _build_risk_filter_query(self, elev_min, elev_max, saf_classes, min_max_ppr, cardinal_dirs=None):
         """Build SQL WHERE clause for Risk Assessment layer filtering.
 
         Args:
             elev_min, elev_max: Elevation range (uses pra_elev field)
             saf_classes: List of safety classes (e.g., ["S1", "S2"])
             min_max_ppr: Minimum max_ppr threshold
+            cardinal_dirs: Aspect classes (N, NE, ...); matched against the text field pra_aspct
         """
         conditions = []
 
@@ -867,6 +892,12 @@ class FilterLayers(object):
             # SQL IN clause for multiple safety classes
             classes_str = "', '".join(saf_classes)
             conditions.append(f"saf_class IN ('{classes_str}')")
+
+        # Aspect of the release area (text field with the cardinal direction)
+        valid_dirs = [d for d in (cardinal_dirs or []) if d in self.CARDINAL_RANGES]
+        if valid_dirs:
+            dirs_str = "', '".join(valid_dirs)
+            conditions.append(f"pra_aspct IN ('{dirs_str}')")
 
         # Max PPR filter
         if min_max_ppr is not None:
