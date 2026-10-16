@@ -11,7 +11,7 @@ This toolbox provides easy access to ALARM pipeline outputs directly within ArcG
 - **Filter Layers**: Apply advanced filters to Tracks, PRAs, and Risk Assessment layers
 - **Generate Report**: Create detailed statistics reports for Risk Assessment data
 - **Export Filtered Data**: Export filtered layers as new shapefiles
-- **Compare Scenarios**: Visual comparison of two scenarios using Swipe or Side-by-Side views
+- **Compare Scenarios**: Side-by-side table of all scenarios of a region with one shared filter
 
 ## Installation
 
@@ -162,34 +162,24 @@ Filename: high_risk_buildings.shp
 
 **Tool:** `Compare Scenarios`
 
-Visually compare two scenarios using Swipe or Side-by-Side views.
+Compares the scenarios of one region side by side with **one shared filter**. It does not need loaded layers; the attribute tables are read directly from the result files.
 
 **Parameters:**
-- **Comparison Mode**: Swipe Tool or Side-by-Side Maps
-- **Layer 1** (Left/Top): First scenario layer
-- **Layer 2** (Right/Bottom): Second scenario layer
+- **Region** and **Scenarios to Compare** (default: all five)
+- The same criteria as in *Filter Layers*: elevation, aspect (cardinal directions or degree range), building safety class, minimum max PPR
+- **Output Directory** and **Report Format** (HTML, CSV or both)
 
-**What it does:**
+**What you get** (one column per scenario):
+- Avalanche tracks, PRAs and buildings: filtered / total
+- Buildings by safety class and by max PPR class (filtered)
+- Max and mean PPR of the filtered buildings
+- The applied filter is written at the top of the HTML report
 
-**Swipe Tool Mode:**
-- Makes both layers visible
-- Provides instructions for activating ArcGIS Pro Swipe tool
-- Synchronizes extent to Layer 1
-- Allows interactive comparison with draggable swipe line
-
-**Side-by-Side Mode:**
-- Makes both layers visible
-- Provides detailed instructions for Layout setup
-- Guides user through creating two synchronized map frames
-
-**Example:**
-```
-Mode: Swipe Tool
-Layer 1: tracks_Vest_Finnmark_D
-Layer 2: tracks_Vest_Finnmark_E
-→ Prepares layers for swipe comparison
-→ Follow on-screen instructions to activate Swipe tool
-```
+**Notes:**
+- Safety class and PPR only apply to buildings; tracks and PRAs are filtered by elevation and aspect.
+- A degree range is not available for buildings (their aspect is stored as N/NE/...); use cardinal directions there.
+- The numbers are identical to what *Filter Layers* shows on the loaded layers (checked in the tests).
+- Reading five scenarios of a large region takes about a minute (the PRA tables are big).
 
 ## Symbology Reference
 
