@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Filter Layers: layers are now picked explicitly from the map (type detected by fields) instead of guessed from layer names; new "Reset filters" option; feature counts are computed from the source with the query; aspect filter for Risk Assessment is reported as unsupported instead of silently ignored
 
 ### Removed
+- Update Overview tool (it could not run inside ArcGIS Pro: the script it started needs geopandas/rasterio and is not part of the toolbox); run `generate_data_overview.py` from the pipeline environment instead
 - Obsolete helper scripts (`analyze_fields.py`, `check_fields_*.txt`) and stale per-tool `.pyt.xml` files
 
 ## [1.0.0] - 2026-04-07

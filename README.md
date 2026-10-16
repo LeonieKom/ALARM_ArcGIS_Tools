@@ -12,7 +12,6 @@ This toolbox provides easy access to ALARM pipeline outputs directly within ArcG
 - **Generate Report**: Create detailed statistics reports for Risk Assessment data
 - **Export Filtered Data**: Export filtered layers as new shapefiles
 - **Compare Scenarios**: Visual comparison of two scenarios using Swipe or Side-by-Side views
-- **Update Overview**: Regenerate HTML overview page
 
 ## Installation
 
@@ -186,22 +185,6 @@ Layer 2: tracks_Vest_Finnmark_E
 → Follow on-screen instructions to activate Swipe tool
 ```
 
-### 6. Update Overview
-
-**Tool:** `Update Overview`
-
-Regenerates the HTML overview page with thumbnails and statistics.
-
-**What it does:**
-- Scans `L:\ALARM\Results\` for completed regions
-- Generates preview images for each scenario
-- Creates interactive HTML page at `L:\ALARM\ALARM_Overview\index.html`
-
-**When to use:**
-- After new regions are processed
-- To update statistics
-- To regenerate thumbnails
-
 ## Symbology Reference
 
 ### PPR / PFV / PFT Rasters
@@ -263,16 +246,11 @@ Note on file names: newer pipeline runs write result files without dots (`..._re
 
 ## Configuration
 
-The toolbox uses these default paths:
-- **Results Base**: `L:\ALARM\Results`
-- **Overview Output**: `L:\ALARM\ALARM_Overview`
-
-To change these, edit the configuration section in `ALARM_Tools.pyt`:
+The toolbox reads results from `L:\ALARM\Results`. To change this, edit the configuration section in `ALARM_Tools.pyt`:
 
 ```python
 # Configuration
 self.results_base = Path(r"L:\ALARM\Results")
-self.overview_output = Path(r"L:\ALARM\ALARM_Overview")
 ```
 
 ## Scenarios

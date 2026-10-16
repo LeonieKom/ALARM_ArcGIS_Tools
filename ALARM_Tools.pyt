@@ -9,7 +9,6 @@ Tools:
 3. Generate Report - Statistics report (HTML/CSV) for a Risk Assessment layer
 4. Export Filtered Data - Export a (filtered) layer
 5. Compare Scenarios - Prepare two layers for comparison
-6. Update Overview - Regenerate HTML overview page
 
 Author: ALARM Pipeline
 Date: 2026-04-07
@@ -20,8 +19,6 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-import subprocess
-import sys
 
 
 class Toolbox(object):
@@ -32,7 +29,7 @@ class Toolbox(object):
         self.description = "Tools for loading and managing ALARM regional avalanche data"
 
         # List of tool classes associated with this toolbox
-        self.tools = [LoadALARMData, FilterLayers, GenerateReport, ExportFilteredData, CompareScenarios, UpdateOverview]
+        self.tools = [LoadALARMData, FilterLayers, GenerateReport, ExportFilteredData, CompareScenarios]
 
 
 class LoadALARMData(object):
@@ -495,98 +492,6 @@ class LoadALARMData(object):
             arcpy.AddMessage("Applied risk assessment symbology")
         except Exception as e:
             arcpy.AddWarning(f"Could not apply risk assessment symbology: {e}")
-
-
-class UpdateOverview(object):
-    def __init__(self):
-        """Define the tool (tool name is the name of the class)."""
-        self.label = "6. Update Overview"
-        self.description = "Regenerate HTML overview page with latest data"
-        self.canRunInBackground = False
-
-    def getParameterInfo(self):
-        """Define parameter definitions"""
-
-        # Parameter 0: Output directory
-        param0 = arcpy.Parameter(
-            displayName="Output Directory",
-            name="output_dir",
-            datatype="DEFolder",
-            parameterType="Optional",
-            direction="Input")
-
-        param0.value = r"L:\ALARM\ALARM_Overview"
-
-        return [param0]
-
-    def isLicensed(self):
-        """Set whether tool is licensed to execute."""
-        return True
-
-    def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed."""
-        return
-
-    def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool
-        parameter."""
-        return
-
-    def execute(self, parameters, messages):
-        """The source code of the tool."""
-
-        output_dir = parameters[0].valueAsText
-
-        arcpy.AddMessage("Updating ALARM overview...")
-        arcpy.AddMessage(f"Output directory: {output_dir}")
-
-        # Find Python script
-        script_dir = Path(__file__).parent
-        script_path = script_dir / "generate_data_overview.py"
-
-        if not script_path.exists():
-            arcpy.AddError(f"Script not found: {script_path}")
-            return
-
-        # Get Python executable from conda environment
-        python_exe = sys.executable
-
-        arcpy.AddMessage(f"Running script: {script_path}")
-        arcpy.AddMessage(f"Python: {python_exe}")
-
-        try:
-            # Run script
-            result = subprocess.run(
-                [python_exe, str(script_path)],
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minutes timeout
-            )
-
-            # Show output
-            if result.stdout:
-                for line in result.stdout.split('\n'):
-                    if line.strip():
-                        arcpy.AddMessage(line)
-
-            if result.stderr:
-                for line in result.stderr.split('\n'):
-                    if line.strip():
-                        arcpy.AddWarning(line)
-
-            if result.returncode == 0:
-                arcpy.AddMessage("Overview updated successfully!")
-                arcpy.AddMessage(f"Open: {output_dir}\\index.html")
-            else:
-                arcpy.AddError(f"Script failed with return code {result.returncode}")
-
-        except subprocess.TimeoutExpired:
-            arcpy.AddError("Script timed out after 10 minutes")
-        except Exception as e:
-            arcpy.AddError(f"Error running script: {e}")
-
-        return
 
 
 class FilterLayers(object):
