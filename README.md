@@ -49,7 +49,7 @@ Loads data for a specific region and scenario with automatic symbology.
 **Parameters:**
 - **Region**: Select from available regions (e.g., Vest_Finnmark, Nord_Troms)
 - **Scenario**: Select scenario (A, B, C, D, E)
-- **Data Types**: Choose which layers to load (PPR Raster, Tracks, PRAs, Risk Assessment)
+- **Data Types**: Choose which layers to load (PPR Raster, PFV Raster, PFT Raster, Tracks, PRAs, Risk Assessment). PFV/PFT use the `.lyrx` next to the raster.
 - **Add to Group Layer**: Organize layers in a group (default: Yes)
 
 **What it does:**
@@ -75,7 +75,7 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 **Note:** PRAs must be loaded via the **Load ALARM Data** tool (which automatically converts them to File Geodatabase format with proper numeric field types). PRAs loaded directly as shapefiles cannot be filtered.
 
 **Parameters:**
-- **Layers to Filter**: Multi-select (Tracks, PRAs, Risk Assessment)
+- **Layers to Filter**: Pick one or more layers from the map (type is detected from the fields: Tracks, PRAs, Risk Assessment)
 - **Elevation**: Min/Max range (meters)
 - **Aspect Filter Type**: None, Cardinal Directions, or Degree Range
   - **Cardinal Directions**: Multi-select (N, NE, E, SE, S, SW, W, NW)
@@ -86,8 +86,9 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 **What it does:**
 - Applies SQL definition queries to selected layers
 - Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, PRAs: `elev_med`/`aspect_deg`, Risk Assessment: `pra_elev`)
-- Filters are cumulative (AND logic)
-- Shows applied query and feature counts in messages
+- Criteria within one run are combined with AND; a new run replaces the existing filter on that layer
+- **Reset filters** removes the definition query from the selected layers
+- Shows applied query and feature counts (before -> after) in messages
 
 **Example:**
 ```

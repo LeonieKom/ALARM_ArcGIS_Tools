@@ -5,6 +5,24 @@ All notable changes to the ALARM ArcGIS Tools will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Generate Report: HTML export crashed with `NameError` (`datetime` was not imported)
+- Load ALARM Data: PRA text fields (`elev_med`, `aspect_deg`, ...) are now converted to DOUBLE so numeric filters work
+- Load/Filter/Export: ArcPy cannot resolve shapefile paths with a dot in the name (e.g. `..._rel2.3m.shp`), so conversions and counts now work on map layers instead of paths
+- Export Filtered Data: output names are sanitized (dots in layer names produced invalid shapefile names); uses `ExportFeatures`
+- Load ALARM Data no longer writes spatial index files (`.sbn/.sbx`) into the results folders on `L:`
+
+### Added
+- Load ALARM Data: optional PFV (flow velocity) and PFT (flow thickness) rasters, styled from the `.lyrx` files written by the pipeline
+
+### Changed
+- Filter Layers: layers are now picked explicitly from the map (type detected by fields) instead of guessed from layer names; new "Reset filters" option; feature counts are computed from the source with the query; aspect filter for Risk Assessment is reported as unsupported instead of silently ignored
+
+### Removed
+- Obsolete helper scripts (`analyze_fields.py`, `check_fields_*.txt`) and stale per-tool `.pyt.xml` files
+
 ## [1.0.0] - 2026-04-07
 
 ### Added
