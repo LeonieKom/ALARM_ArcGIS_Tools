@@ -204,13 +204,10 @@ Regenerates the HTML overview page with thumbnails and statistics.
 
 ## Symbology Reference
 
-### PPR Raster (Peak Pressure)
-- **≤ 1 kPa**: Transparent
-- **1-10 kPa**: Light blue (#b0f4fa)
-- **10-25 kPa**: Green (#75c165)
-- **25-50 kPa**: Orange (#a96c00)
-- **> 50 kPa**: Dark purple (#8b0069)
-- **Opacity**: 70%
+### PPR / PFV / PFT Rasters
+Styled from the `.lyrx` file the pipeline writes next to each raster (single source of truth), e.g.
+`ppr_<region>_<scenario>_max.lyrx`. PPR classes: < 1, 1-3, 3-10, 10-20, 20-30, 30-60, > 60 kPa.
+If the `.lyrx` is missing, PPR falls back to a built-in 5-class scale.
 
 ### Tracks (Avalanche Paths)
 - **Field**: `med_pres` (median pressure)

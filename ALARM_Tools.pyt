@@ -157,7 +157,14 @@ class LoadALARMData(object):
             if ppr_file:
                 arcpy.AddMessage(f"Loading PPR raster: {ppr_file.name}")
                 layer = map_obj.addDataFromPath(str(ppr_file))
-                self._apply_ppr_symbology(layer)
+                # The pipeline's .lyrx is the single source of truth for PPR colors;
+                # the built-in symbology is only the fallback if it is missing.
+                ppr_lyrx = ppr_file.with_suffix(".lyrx")
+                if ppr_lyrx.exists():
+                    self._apply_lyrx(layer, ppr_lyrx)
+                else:
+                    arcpy.AddWarning(f"  No layer file ({ppr_lyrx.name}) - using built-in PPR symbology")
+                    self._apply_ppr_symbology(layer)
                 layers_added.append(layer)
             else:
                 arcpy.AddWarning("PPR raster not found")

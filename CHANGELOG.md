@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Load ALARM Data: optional PFV (flow velocity) and PFT (flow thickness) rasters, styled from the `.lyrx` files written by the pipeline
 
 ### Changed
+- Load ALARM Data: PPR raster symbology now comes from the pipeline's `.lyrx` (built-in scale only as fallback)
 - Filter Layers: layers are now picked explicitly from the map (type detected by fields) instead of guessed from layer names; new "Reset filters" option; feature counts are computed from the source with the query; aspect filter for Risk Assessment is reported as unsupported instead of silently ignored
 
 ### Removed
