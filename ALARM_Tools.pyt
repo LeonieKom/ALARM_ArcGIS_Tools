@@ -1006,6 +1006,10 @@ class ExportFilteredData(object):
 
         output_path = os.path.join(output_dir, output_name)
 
+        if os.path.exists(output_path):
+            arcpy.AddError(f"{output_path} already exists. Choose another filename or delete the existing file.")
+            return
+
         arcpy.AddMessage(f"Exporting layer: {layer.name}")
         arcpy.AddMessage(f"Output: {output_path}")
 
