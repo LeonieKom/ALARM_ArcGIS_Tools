@@ -259,6 +259,8 @@ L:\ALARM\Results\
 └── ...
 ```
 
+Note on file names: newer pipeline runs write result files without dots (`..._rel2_3m.shp`, folder names keep them), because ArcPy cannot resolve shapefile paths containing a dot. Older results still use `rel2.3m` in file names. The toolbox handles both (it loads files via map layers and finds them with wildcards).
+
 ## Configuration
 
 The toolbox uses these default paths:
