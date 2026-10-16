@@ -85,8 +85,12 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 **What it does:**
 - Applies SQL definition queries to selected layers
 - Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, PRAs: `elev_med`/`aspect_deg`, Risk Assessment: `pra_elev`)
-- Criteria within one run are combined with AND; a new run replaces the existing filter on that layer
-- **Reset filters** removes the definition query from the selected layers
+- Criteria within one run are combined with AND
+- **Filter Mode** controls what happens to a filter that is already on the layer:
+  - *Refine existing filter* (default): the new criteria are added with AND, so you can filter step by step (e.g. first elevation, then aspect, then safety class)
+  - *Replace existing filter*: the old filter is discarded
+  - *Reset filter*: removes the filter from the selected layers
+- With refinement the messages show total / before / now feature counts
 - Shows applied query and feature counts (before -> after) in messages
 
 **Example:**

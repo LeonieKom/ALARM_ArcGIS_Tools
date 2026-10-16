@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Load ALARM Data no longer writes spatial index files (`.sbn/.sbx`) into the results folders on `L:`
 
 ### Added
+- Filter Layers: "Filter Mode" (refine / replace / reset) so filters can be applied step by step on already filtered layers; counts shown before and after each step
 - Load ALARM Data: optional PFV (flow velocity) and PFT (flow thickness) rasters, styled from the `.lyrx` files written by the pipeline
 
 ### Changed

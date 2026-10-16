@@ -495,10 +495,14 @@ class LoadALARMData(object):
 
 
 class FilterLayers(object):
+    MODE_REFINE = "Refine existing filter (add to it)"
+    MODE_REPLACE = "Replace existing filter"
+    MODE_RESET = "Reset filter (remove it)"
+
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "2. Filter Layers"
-        self.description = "Apply filters to selected ALARM layers (Tracks, PRAs, Risk Assessment). A new filter replaces the existing one; PRAs must be loaded via Load ALARM Data."
+        self.description = "Apply filters to selected ALARM layers (Tracks, PRAs, Risk Assessment). Run it again to refine an existing filter, replace it or reset it; PRAs must be loaded via Load ALARM Data."
         self.canRunInBackground = False
 
     def getParameterInfo(self):
@@ -598,15 +602,17 @@ class FilterLayers(object):
             parameterType="Optional",
             direction="Input")
 
-        # Parameter 9: Reset filters
+        # Parameter 9: How to combine with a filter that is already on the layer
         param9 = arcpy.Parameter(
-            displayName="Reset filters (remove existing definition queries instead of filtering)",
-            name="reset_filters",
-            datatype="GPBoolean",
-            parameterType="Optional",
+            displayName="Filter Mode",
+            name="filter_mode",
+            datatype="GPString",
+            parameterType="Required",
             direction="Input")
 
-        param9.value = False
+        param9.filter.type = "ValueList"
+        param9.filter.list = [self.MODE_REFINE, self.MODE_REPLACE, self.MODE_RESET]
+        param9.value = self.MODE_REFINE
 
         return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9]
 
@@ -654,7 +660,9 @@ class FilterLayers(object):
         saf_classes = parameters[7].valueAsText.split(';') if parameters[7].value else []
         saf_classes = [s.strip().strip("'\"") for s in saf_classes] if saf_classes else []
         min_max_ppr = parameters[8].value
-        reset = bool(parameters[9].value)
+        mode = parameters[9].valueAsText or self.MODE_REFINE
+        reset = mode == self.MODE_RESET
+        refine = mode == self.MODE_REFINE
 
         # Get current map
         aprx = arcpy.mp.ArcGISProject("CURRENT")
@@ -715,18 +723,29 @@ class FilterLayers(object):
                     continue
 
                 try:
-                    # Count unfiltered features first. The layer is used instead of its
+                    previous_query = layer.definitionQuery or ""
+                    # Refine: keep the filter that is already on the layer and add the new one
+                    if refine and previous_query:
+                        filter_query = f"({previous_query}) AND ({filter_query})"
+
+                    # Count with a temporary layer. The layer is used instead of its
                     # dataSource path, because paths with dots are not resolvable.
                     layer.definitionQuery = ""
                     total = int(arcpy.management.GetCount(layer)[0])
+                    before = total
+                    if previous_query:
+                        before = self._count(layer, previous_query)
+
                     layer.definitionQuery = filter_query
-                    arcpy.AddMessage(f"  Applied filter to: {layer.name} ({layer_type})")
+                    action = "Refined" if (refine and previous_query) else "Applied"
+                    arcpy.AddMessage(f"  {action} filter on: {layer.name} ({layer_type})")
                     arcpy.AddMessage(f"    Query: {filter_query}")
 
-                    tmp = arcpy.management.MakeFeatureLayer(layer, "alarm_filter_tmp", filter_query)
-                    matched = int(arcpy.management.GetCount(tmp)[0])
-                    arcpy.management.Delete(tmp)
-                    arcpy.AddMessage(f"    Features: {total} -> {matched}")
+                    matched = self._count(layer, filter_query)
+                    if previous_query and refine:
+                        arcpy.AddMessage(f"    Features: {total} total | {before} before | {matched} now")
+                    else:
+                        arcpy.AddMessage(f"    Features: {total} -> {matched}")
 
                     if matched == 0:
                         arcpy.AddWarning(f"    Filter matches 0 features for {layer.name} - too restrictive?")
@@ -739,9 +758,17 @@ class FilterLayers(object):
             arcpy.AddWarning("No layers were changed.")
         else:
             action = "Reset" if reset else "Filtered"
-            arcpy.AddMessage(f"{action} {layers_filtered} layer(s). A new filter replaces any existing one on the same layer.")
+            arcpy.AddMessage(f"{action} {layers_filtered} layer(s).")
 
         return
+
+    def _count(self, layer, query):
+        """Number of features of a layer matching a query (the layer, not its path, is used)."""
+        tmp = arcpy.management.MakeFeatureLayer(layer, "alarm_filter_tmp", query)
+        try:
+            return int(arcpy.management.GetCount(tmp)[0])
+        finally:
+            arcpy.management.Delete(tmp)
 
     def _detect_layer_type(self, layer):
         """Identify an ALARM layer by its fields: 'tracks', 'pras', 'risk' or None."""
