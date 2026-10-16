@@ -195,44 +195,28 @@ class LoadALARMData(object):
             pra_file = self._find_file(scenario_dir, "pra_*.shp")
             if pra_file:
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
-                arcpy.AddMessage("  Converting to File Geodatabase (fixes String field types for filtering)...")
-
                 gdb_path = aprx.defaultGeodatabase
 
-                # Generate feature class name (GDB names must not contain - or .)
-                fc_name = re.sub(r"[^0-9A-Za-z_]", "_", f"pra_{region}_{scenario_id}")
+                # The converted copy is cached in the project geodatabase. The name carries
+                # the modification time and size of the shapefile, so the cache is reused
+                # as long as the source is unchanged and rebuilt automatically when it changes.
+                # (GDB names must not contain - or .)
+                base_name = re.sub(r"[^0-9A-Za-z_]", "_", f"pra_{region}_{scenario_id}")
+                stat = pra_file.stat()
+                fc_name = f"{base_name}_{int(stat.st_mtime)}_{stat.st_size}"
                 fc_path = os.path.join(gdb_path, fc_name)
 
                 if arcpy.Exists(fc_path):
-                    arcpy.management.Delete(fc_path)
-
-                # ArcPy cannot resolve shapefile *paths* whose name contains a dot
-                # (e.g. '..._rel2.3m.shp'), but it can use them as map layers. So the
-                # shapefile is added as a temporary layer and converted from there.
-                src_layer = map_obj.addDataFromPath(str(pra_file))
-
-                # The PRA shapefile stores numbers as text. Map them to DOUBLE
-                # explicitly, otherwise numeric filters (elevation, aspect) fail.
-                field_mappings = arcpy.FieldMappings()
-                field_mappings.addTable(src_layer)
-                numeric_fields = {"elev_med", "aspect_deg", "area_m2", "t_high", "t_low"}
-                for i in range(field_mappings.fieldCount):
-                    fmap = field_mappings.getFieldMap(i)
-                    if fmap.outputField.name.lower() in numeric_fields:
-                        out_field = fmap.outputField
-                        out_field.type = "Double"
-                        fmap.outputField = out_field
-                        field_mappings.replaceFieldMap(i, fmap)
-
-                try:
-                    arcpy.conversion.ExportFeatures(src_layer, fc_path, field_mapping=field_mappings)
-                finally:
-                    map_obj.removeLayer(src_layer)
-
-                arcpy.AddMessage(f"  Converted to: {fc_path}")
+                    arcpy.AddMessage("  Using cached geodatabase copy (source unchanged)")
+                else:
+                    self._delete_old_pra_caches(gdb_path, base_name)
+                    arcpy.AddMessage("  Converting to File Geodatabase (numeric fields; takes a while, done once)...")
+                    self._convert_pra(map_obj, pra_file, fc_path)
+                    arcpy.AddMessage(f"  Converted to: {fc_path}")
 
                 # Load from geodatabase instead of shapefile
                 layer = map_obj.addDataFromPath(fc_path)
+                layer.name = base_name
                 self._apply_pra_symbology(layer)
                 layers_added.append(layer)
             else:
@@ -319,6 +303,45 @@ class LoadALARMData(object):
         """Find first file matching pattern in directory."""
         files = list(directory.glob(pattern))
         return files[0] if files else None
+
+    def _delete_old_pra_caches(self, gdb_path, base_name):
+        """Remove cached PRA copies of this region/scenario that belong to an older source file."""
+        pattern = re.compile(rf"^{re.escape(base_name)}_\d+_\d+$")
+        previous_workspace = arcpy.env.workspace
+        try:
+            arcpy.env.workspace = gdb_path
+            for fc in arcpy.ListFeatureClasses(f"{base_name}_*") or []:
+                if pattern.match(fc):
+                    try:
+                        arcpy.management.Delete(os.path.join(gdb_path, fc))
+                    except Exception:
+                        # e.g. still used as a layer in the map; harmless, just keep it
+                        arcpy.AddWarning(f"  Could not remove outdated cache '{fc}' (in use?) - remove the layer and delete it manually")
+        finally:
+            arcpy.env.workspace = previous_workspace
+
+    def _convert_pra(self, map_obj, pra_file, fc_path):
+        """Convert the PRA shapefile to a feature class with numeric fields."""
+        # ArcPy cannot resolve shapefile *paths* whose name contains a dot
+        # (e.g. '..._rel2.3m.shp'), but it can use them as map layers. So the
+        # shapefile is added as a temporary layer and converted from there.
+        src_layer = map_obj.addDataFromPath(str(pra_file))
+        try:
+            # The PRA shapefile stores numbers as text. Map them to DOUBLE
+            # explicitly, otherwise numeric filters (elevation, aspect) fail.
+            field_mappings = arcpy.FieldMappings()
+            field_mappings.addTable(src_layer)
+            numeric_fields = {"elev_med", "aspect_deg", "area_m2", "t_high", "t_low"}
+            for i in range(field_mappings.fieldCount):
+                fmap = field_mappings.getFieldMap(i)
+                if fmap.outputField.name.lower() in numeric_fields:
+                    out_field = fmap.outputField
+                    out_field.type = "Double"
+                    fmap.outputField = out_field
+                    field_mappings.replaceFieldMap(i, fmap)
+            arcpy.conversion.ExportFeatures(src_layer, fc_path, field_mapping=field_mappings)
+        finally:
+            map_obj.removeLayer(src_layer)
 
     def _apply_lyrx(self, layer, lyrx_path):
         """Apply the symbology of a .lyrx file written by the pipeline (if present)."""

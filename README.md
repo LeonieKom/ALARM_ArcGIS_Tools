@@ -55,7 +55,7 @@ Loads data for a specific region and scenario with automatic symbology.
 - Finds data in `L:\ALARM\Results\{region}\merged\{scenario}\`
 - Loads selected layers into current map
 - Applies standard ALARM symbology automatically
-- Adds spatial index for performance optimization
+- Converts PRAs to a geodatabase feature class with numeric fields; the copy is cached in the project geodatabase, so the first load of a large region takes about a minute and later loads are instant
 
 **Example:**
 ```
