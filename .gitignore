@@ -34,3 +34,6 @@ desktop.ini
 # Temporary files
 *.tmp
 *.temp
+
+# ArcGIS Pro regenerates these metadata files whenever a toolbox is opened or run
+*.pyt.xml
