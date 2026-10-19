@@ -8,114 +8,44 @@ Tools:
 2. Filter Layers - Filter Tracks / PRAs / Risk Assessment by elevation, aspect, safety class, PPR
 3. Generate Report - Statistics report (HTML/CSV) for a Risk Assessment layer
 4. Export Filtered Data - Export a (filtered) layer
-5. Compare Scenarios - Prepare two layers for comparison
+5. Compare Scenarios - Compare the scenarios of a region with one shared filter
 
 Author: ALARM Pipeline
 Date: 2026-04-07
 """
 
 import arcpy
+import importlib
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
+# The logic that does not need arcpy lives in the alarm_core package next to this file.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
-# Aspect classes as degree ranges [from, to). Shared by the SQL filters (Filter Layers)
-# and the Python filters (Compare Scenarios) so that both use identical boundaries.
-CARDINAL_RANGES = {
-    'N': [(337.5, 360), (0, 22.5)],
-    'NE': [(22.5, 67.5)],
-    'E': [(67.5, 112.5)],
-    'SE': [(112.5, 157.5)],
-    'S': [(157.5, 202.5)],
-    'SW': [(202.5, 247.5)],
-    'W': [(247.5, 292.5)],
-    'NW': [(292.5, 337.5)]
-}
+import alarm_core.config as _config
+import alarm_core.data as _data
+import alarm_core.dbf as _dbf
+import alarm_core.filters as _filters
+import alarm_core.compare as _compare
 
-
-def merged_cardinal_ranges(directions):
-    """Degree ranges for the given cardinal directions, neighbouring ones merged.
-
-    Example: N + NE + E -> [(0, 112.5), (337.5, 360)]. A range ending at 360 includes 360.
-    """
-    ranges = sorted(r for d in directions for r in CARDINAL_RANGES.get(d, []))
-    merged = []
-    for lo, hi in ranges:
-        if merged and merged[-1][1] == lo:
-            merged[-1] = (merged[-1][0], hi)
-        else:
-            merged.append((lo, hi))
-    return merged
+# ArcGIS Pro keeps imported modules for the whole session. Reloading them here makes
+# "Refresh" of the toolbox pick up edits without restarting Pro.
+for _module in (_config, _data, _dbf, _filters, _compare):
+    importlib.reload(_module)
 
 
-def read_dbf_columns(dbf_path, wanted):
-    """Read selected columns of a .dbf file without arcpy.
-
-    Used where only attribute values are needed. It does not depend on the shapefile
-    name (ArcPy cannot resolve names with dots) and is fast for large tables.
-
-    Args:
-        dbf_path: path of the .dbf file
-        wanted: field names (case-insensitive)
-    Returns:
-        (dict field name -> list of values, number of records). Numeric (N/F) fields
-        become float or None, other fields stripped strings. Deleted records are skipped.
-    """
-    import struct
-
-    with open(dbf_path, "rb") as fh:
-        data = fh.read()
-
-    n_records, header_len, record_len = struct.unpack("<IHH", data[4:12])
-    fields = []
-    pos = 32
-    offset = 1  # first byte of every record is the deletion flag
-    while pos < len(data) and data[pos] != 0x0D:
-        name = data[pos:pos + 11].split(b"\x00")[0].decode("ascii", "replace")
-        ftype = chr(data[pos + 11])
-        length = data[pos + 16]
-        fields.append((name, ftype, offset, length))
-        offset += length
-        pos += 32
-
-    by_lower = {f[0].lower(): f for f in fields}
-    selected = []
-    for name in wanted:
-        if name.lower() not in by_lower:
-            raise KeyError(f"Field '{name}' not found in {os.path.basename(dbf_path)}")
-        selected.append(by_lower[name.lower()])
-
-    result = {name: [] for name in wanted}
-    count = 0
-    for i in range(n_records):
-        start = header_len + i * record_len
-        record = data[start:start + record_len]
-        if not record or record[0:1] == b"*":
-            continue
-        count += 1
-        for name, (_, ftype, off, length) in zip(wanted, selected):
-            raw = record[off:off + length].decode("utf-8", "replace").strip()
-            if ftype in ("N", "F"):
-                try:
-                    value = float(raw) if raw else None
-                except ValueError:
-                    value = None
-            else:
-                value = raw
-            result[name].append(value)
-    return result, count
+def _split_values(text):
+    """Values of a multi-value parameter (valueAsText is 'a;b;c', values may be quoted)."""
+    if not text:
+        return []
+    return [v.strip().strip("'\"") for v in text.split(';') if v.strip()]
 
 
-def to_number(value):
-    """Float of a number or a numeric text (PRA fields are stored as text); None if impossible."""
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 class Toolbox(object):
@@ -136,16 +66,10 @@ class LoadALARMData(object):
         self.description = "Load ALARM data for a specific region and scenario into the current map"
         self.canRunInBackground = False
 
-        # Configuration
-        self.results_base = Path(r"L:\ALARM\Results")
-
-        self.scenarios = {
-            'A': 'A (80-60, prox0, rel1.2m)',
-            'B': 'B (80-60, prox0, rel1.8m)',
-            'C': 'C (80-60, prox100, rel2.3m)',
-            'D': 'D (75-55, prox0, rel2.3m)',
-            'E': 'E (75-55, prox150, rel2.3m)'
-        }
+        # Configuration (see alarm_core/config.py; can be overridden in alarm_tools_config.json)
+        cfg = _config.load_config()
+        self.results_base = cfg['results_base']
+        self.scenarios = cfg['scenarios']
 
     def getParameterInfo(self):
         """Define parameter definitions"""
@@ -221,7 +145,7 @@ class LoadALARMData(object):
         scenario_full = parameters[1].valueAsText
         scenario_id = scenario_full.split(' - ')[0]  # Extract 'A' from 'A - (80-60, prox0, rel1.2m)'
         # Strip quotes and whitespace from data types
-        data_types = [dt.strip().strip("'\"") for dt in parameters[2].valueAsText.split(';')]
+        data_types = _split_values(parameters[2].valueAsText)
         use_group = parameters[3].value
 
         arcpy.AddMessage(f"Loading data for {region}, Scenario {scenario_id}")
@@ -372,34 +296,16 @@ class LoadALARMData(object):
         return
 
     def _get_completed_regions(self):
-        """Get list of regions with merged data (completed or partial)."""
-        regions = []
-        if not self.results_base.exists():
-            return regions
-
-        for region_dir in self.results_base.iterdir():
-            if region_dir.is_dir():
-                # Check if merged folder exists (indicates data is available)
-                merged_dir = region_dir / "merged"
-                if merged_dir.exists() and any(merged_dir.iterdir()):
-                    regions.append(region_dir.name)
-
-        return sorted(regions)
+        """Regions with merged data (completed or partial)."""
+        return _data.completed_regions(self.results_base)
 
     def _find_scenario_dir(self, region, scenario_id):
-        """Find scenario directory for given region and scenario."""
-        region_dir = self.results_base / region / "merged"
-        if not region_dir.exists():
-            return None
-
-        # Find directory starting with scenario ID
-        scenario_dirs = list(region_dir.glob(f"{scenario_id}_*"))
-        return scenario_dirs[0] if scenario_dirs else None
+        """Scenario directory for the given region and scenario, or None."""
+        return _data.find_scenario_dir(self.results_base, region, scenario_id)
 
     def _find_file(self, directory, pattern):
-        """Find first file matching pattern in directory."""
-        files = list(directory.glob(pattern))
-        return files[0] if files else None
+        """First file in the directory matching the pattern, or None."""
+        return _data.find_file(directory, pattern)
 
     def _delete_old_pra_caches(self, gdb_path, base_name):
         """Remove cached PRA copies of this region/scenario that belong to an older source file."""
@@ -779,17 +685,16 @@ class FilterLayers(object):
         """The source code of the tool."""
 
         # Get parameters
-        layer_names = [l.strip().strip("'\"") for l in parameters[0].valueAsText.split(';')]
-        elev_min = parameters[1].value
-        elev_max = parameters[2].value
-        aspect_type = parameters[3].valueAsText if parameters[3].value else "None"
-        cardinal_dirs = parameters[4].valueAsText.split(';') if parameters[4].value else []
-        cardinal_dirs = [d.strip().strip("'\"") for d in cardinal_dirs] if cardinal_dirs else []
-        aspect_min = parameters[5].value
-        aspect_max = parameters[6].value
-        saf_classes = parameters[7].valueAsText.split(';') if parameters[7].value else []
-        saf_classes = [s.strip().strip("'\"") for s in saf_classes] if saf_classes else []
-        min_max_ppr = parameters[8].value
+        layer_names = _split_values(parameters[0].valueAsText)
+        criteria = _filters.make_criteria(
+            elev_min=parameters[1].value,
+            elev_max=parameters[2].value,
+            aspect_type=parameters[3].valueAsText if parameters[3].value else _filters.ASPECT_NONE,
+            cardinal=_split_values(parameters[4].valueAsText),
+            aspect_min=parameters[5].value,
+            aspect_max=parameters[6].value,
+            saf_classes=_split_values(parameters[7].valueAsText),
+            min_max_ppr=parameters[8].value)
         mode = parameters[9].valueAsText or self.MODE_REFINE
         count_features = bool(parameters[10].value) if parameters[10].value is not None else True
         reset = mode == self.MODE_RESET
@@ -834,14 +739,13 @@ class FilterLayers(object):
 
                 layer_type = self._detect_layer_type(layer)
                 if layer_type == "tracks":
-                    filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "pra_elev", "pra_aspdeg")
+                    filter_query = _filters.numeric_query(criteria, "pra_elev", "pra_aspdeg")
                 elif layer_type == "pras":
-                    filter_query = self._build_filter_query(elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, "elev_med", "aspect_deg")
+                    filter_query = _filters.numeric_query(criteria, "elev_med", "aspect_deg")
                 elif layer_type == "risk":
-                    if aspect_type == "Degree Range":
+                    if criteria['aspect_type'] == _filters.ASPECT_DEGREES:
                         arcpy.AddWarning(f"  {layer.name}: a degree range is not supported for Risk Assessment (aspect is stored as N/NE/...) - use Cardinal Directions")
-                    risk_dirs = cardinal_dirs if aspect_type == "Cardinal Directions" else []
-                    filter_query = self._build_risk_filter_query(elev_min, elev_max, saf_classes, min_max_ppr, risk_dirs)
+                    filter_query = _filters.risk_query(criteria)
                 else:
                     arcpy.AddWarning(f"  {layer.name}: not recognised as Tracks, PRAs or Risk Assessment - skipped")
                     continue
@@ -857,8 +761,8 @@ class FilterLayers(object):
                 try:
                     previous_query = layer.definitionQuery or ""
                     # Refine: keep the filter that is already on the layer and add the new one
-                    if refine and previous_query:
-                        filter_query = f"({previous_query}) AND ({filter_query})"
+                    if refine:
+                        filter_query = _filters.combine_refine(previous_query, filter_query)
 
                     # Counting reads the whole layer, which is slow for big shapefiles on L:,
                     # so it is optional. The layer is used (not its dataSource path):
@@ -919,96 +823,6 @@ class FilterLayers(object):
         for f in arcpy.ListFields(layer, field_name):
             return f.type in ("Double", "Single", "Integer", "SmallInteger", "OID")
         return False
-
-    def _build_filter_query(self, elev_min, elev_max, aspect_type, cardinal_dirs, aspect_min, aspect_max, elev_field, aspect_field):
-        """Build SQL WHERE clause for filtering based on elevation and aspect.
-
-        Args:
-            elev_min, elev_max: Elevation range
-            aspect_type: "None", "Cardinal Directions", or "Degree Range"
-            cardinal_dirs: List of cardinal directions
-            aspect_min, aspect_max: Aspect degree range
-            elev_field: Name of elevation field (e.g., "pra_elev", "elev_med")
-            aspect_field: Name of aspect field (e.g., "pra_aspdeg", "aspect_deg") or None
-        """
-        conditions = []
-
-        # Elevation filter
-        if elev_field and elev_min is not None:
-            conditions.append(f"{elev_field} >= {elev_min}")
-        if elev_field and elev_max is not None:
-            conditions.append(f"{elev_field} <= {elev_max}")
-
-        # Aspect filter (only if aspect_field is provided and numeric)
-        if aspect_field:
-            if aspect_type == "Cardinal Directions" and cardinal_dirs:
-                aspect_conditions = self._cardinal_conditions(aspect_field, cardinal_dirs)
-                if aspect_conditions:
-                    conditions.append(f"({' OR '.join(aspect_conditions)})")
-
-            elif aspect_type == "Degree Range" and aspect_min is not None and aspect_max is not None:
-                # Handle wrapping around 0/360 degrees
-                if aspect_min <= aspect_max:
-                    conditions.append(f"({aspect_field} >= {aspect_min} AND {aspect_field} <= {aspect_max})")
-                else:
-                    # Wraps around (e.g., 350 to 10 degrees)
-                    conditions.append(f"({aspect_field} >= {aspect_min} OR {aspect_field} <= {aspect_max})")
-
-        # Combine all conditions
-        if conditions:
-            return " AND ".join(conditions)
-        return None
-
-    def _cardinal_conditions(self, field, directions):
-        """SQL conditions for the given cardinal directions on a numeric aspect field.
-
-        Neighbouring directions are merged into one range (N + NE + E -> 337.5-360 and 0-112.5),
-        which keeps the query short. 360 itself is included in the upper range.
-        """
-        conditions = []
-        for lo, hi in merged_cardinal_ranges(directions):
-            upper = f"{field} <= {hi}" if hi >= 360 else f"{field} < {hi}"
-            conditions.append(f"({field} >= {lo} AND {upper})")
-        return conditions
-
-    def _build_risk_filter_query(self, elev_min, elev_max, saf_classes, min_max_ppr, cardinal_dirs=None):
-        """Build SQL WHERE clause for Risk Assessment layer filtering.
-
-        Args:
-            elev_min, elev_max: Elevation range (uses pra_elev field)
-            saf_classes: List of safety classes (e.g., ["S1", "S2"])
-            min_max_ppr: Minimum max_ppr threshold
-            cardinal_dirs: Aspect classes (N, NE, ...); matched against the text field pra_aspct
-        """
-        conditions = []
-
-        # Elevation filter
-        if elev_min is not None:
-            conditions.append(f"pra_elev >= {elev_min}")
-        if elev_max is not None:
-            conditions.append(f"pra_elev <= {elev_max}")
-
-        # Safety class filter
-        if saf_classes:
-            # SQL IN clause for multiple safety classes
-            classes_str = "', '".join(saf_classes)
-            conditions.append(f"saf_class IN ('{classes_str}')")
-
-        # Aspect of the release area (text field with the cardinal direction)
-        valid_dirs = [d for d in (cardinal_dirs or []) if d in CARDINAL_RANGES]
-        if valid_dirs:
-            dirs_str = "', '".join(valid_dirs)
-            conditions.append(f"pra_aspct IN ('{dirs_str}')")
-
-        # Max PPR filter
-        if min_max_ppr is not None:
-            conditions.append(f"max_ppr >= {min_max_ppr}")
-
-        # Combine all conditions
-        if conditions:
-            return " AND ".join(conditions)
-        return None
-
 
 class ExportFilteredData(object):
     def __init__(self):
@@ -1412,12 +1226,9 @@ class GenerateReport(object):
 class CompareScenarios(object):
     """Compare the scenarios of one region side by side, with one shared filter.
 
-    The tables are read directly from the .dbf files, so no layers have to be loaded.
-    The criteria are the same as in 'Filter Layers' and use the same boundaries.
+    The counting and the tables live in alarm_core.compare; this class only handles the
+    tool dialog and the messages.
     """
-
-    PPR_CLASSES = [("0-25 kPa", 0, 25), ("25-50 kPa", 25, 50), ("50-100 kPa", 50, 100),
-                   ("100-200 kPa", 100, 200), (">200 kPa", 200, None)]
 
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
@@ -1428,19 +1239,20 @@ class CompareScenarios(object):
 
     def getParameterInfo(self):
         """Define parameter definitions"""
-        loader = LoadALARMData()
+        cfg = _config.load_config()
 
         param0 = arcpy.Parameter(displayName="Region", name="region", datatype="GPString",
                                  parameterType="Required", direction="Input")
-        regions = loader._get_completed_regions()
+        regions = _data.completed_regions(cfg['results_base'])
         param0.filter.type = "ValueList"
         param0.filter.list = regions if regions else ["No regions found"]
 
+        scenario_list = [f"{k} - {v}" for k, v in cfg['scenarios'].items()]
         param1 = arcpy.Parameter(displayName="Scenarios to Compare", name="scenarios", datatype="GPString",
                                  parameterType="Required", direction="Input", multiValue=True)
         param1.filter.type = "ValueList"
-        param1.filter.list = [f"{k} - {v}" for k, v in loader.scenarios.items()]
-        param1.value = [f"{k} - {v}" for k, v in loader.scenarios.items()]
+        param1.filter.list = scenario_list
+        param1.value = scenario_list
 
         param2 = arcpy.Parameter(displayName="Minimum Elevation (m)", name="elev_min", datatype="GPDouble",
                                  parameterType="Optional", direction="Input")
@@ -1450,8 +1262,8 @@ class CompareScenarios(object):
         param4 = arcpy.Parameter(displayName="Aspect Filter Type", name="aspect_type", datatype="GPString",
                                  parameterType="Optional", direction="Input")
         param4.filter.type = "ValueList"
-        param4.filter.list = ["None", "Cardinal Directions", "Degree Range"]
-        param4.value = "None"
+        param4.filter.list = [_filters.ASPECT_NONE, _filters.ASPECT_CARDINAL, _filters.ASPECT_DEGREES]
+        param4.value = _filters.ASPECT_NONE
 
         param5 = arcpy.Parameter(displayName="Cardinal Directions", name="cardinal_dirs", datatype="GPString",
                                  parameterType="Optional", direction="Input", multiValue=True)
@@ -1493,9 +1305,9 @@ class CompareScenarios(object):
         """Enable/disable the aspect parameters depending on the aspect filter type."""
         if parameters[4].value:
             aspect_type = parameters[4].valueAsText
-            parameters[5].enabled = aspect_type == "Cardinal Directions"
-            parameters[6].enabled = aspect_type == "Degree Range"
-            parameters[7].enabled = aspect_type == "Degree Range"
+            parameters[5].enabled = aspect_type == _filters.ASPECT_CARDINAL
+            parameters[6].enabled = aspect_type == _filters.ASPECT_DEGREES
+            parameters[7].enabled = aspect_type == _filters.ASPECT_DEGREES
         return
 
     def updateMessages(self, parameters):
@@ -1505,255 +1317,47 @@ class CompareScenarios(object):
     def execute(self, parameters, messages):
         """The source code of the tool."""
         region = parameters[0].valueAsText
-        scenario_ids = [s.strip().strip("'\"").split(' - ')[0] for s in parameters[1].valueAsText.split(';')]
-        criteria = {
-            'elev_min': parameters[2].value,
-            'elev_max': parameters[3].value,
-            'aspect_type': parameters[4].valueAsText if parameters[4].value else "None",
-            'cardinal': [d.strip().strip("'\"") for d in parameters[5].valueAsText.split(';')] if parameters[5].value else [],
-            'aspect_min': parameters[6].value,
-            'aspect_max': parameters[7].value,
-            'saf_classes': [c.strip().strip("'\"") for c in parameters[8].valueAsText.split(';')] if parameters[8].value else [],
-            'min_max_ppr': parameters[9].value,
-        }
+        scenario_ids = [v.split(' - ')[0] for v in _split_values(parameters[1].valueAsText)]
+        criteria = _filters.make_criteria(
+            elev_min=parameters[2].value,
+            elev_max=parameters[3].value,
+            aspect_type=parameters[4].valueAsText if parameters[4].value else _filters.ASPECT_NONE,
+            cardinal=_split_values(parameters[5].valueAsText),
+            aspect_min=parameters[6].value,
+            aspect_max=parameters[7].value,
+            saf_classes=_split_values(parameters[8].valueAsText),
+            min_max_ppr=parameters[9].value)
         output_dir = parameters[10].valueAsText
         report_format = parameters[11].valueAsText
 
-        loader = LoadALARMData()
+        cfg = _config.load_config()
         results = []
         for sid in scenario_ids:
-            scenario_dir = loader._find_scenario_dir(region, sid)
+            scenario_dir = _data.find_scenario_dir(cfg['results_base'], region, sid)
             if not scenario_dir:
                 arcpy.AddWarning(f"Scenario {sid}: no data found for {region} - skipped")
                 continue
             arcpy.AddMessage(f"Scenario {sid}: reading {scenario_dir.name}")
-            results.append(self.compute_scenario(sid, scenario_dir, criteria, loader))
+            results.append(_compare.compute_scenario(
+                sid, scenario_dir, criteria, label=cfg['scenarios'].get(sid, sid), warn=arcpy.AddWarning))
 
         if not results:
             arcpy.AddError("No scenarios could be read.")
             return
 
-        notes = self.criteria_notes(criteria)
+        rows = _compare.build_rows(results)
+        arcpy.AddMessage("")
+        for line in _compare.table_lines(rows, results):
+            arcpy.AddMessage(line)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base = re.sub(r"[^0-9A-Za-z_]", "_", f"compare_{region}_{timestamp}")
-        rows = self.build_rows(results)
-
-        self._print_table(rows, results)
         if report_format in ("HTML", "Both"):
             html_path = os.path.join(output_dir, base + ".html")
-            self.write_html(html_path, region, results, rows, notes)
+            _compare.write_html(html_path, region, results, rows, criteria)
             arcpy.AddMessage(f"HTML report: {html_path}")
         if report_format in ("CSV", "Both"):
             csv_path = os.path.join(output_dir, base + ".csv")
-            self.write_csv(csv_path, results, rows)
+            _compare.write_csv(csv_path, results, rows)
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return
-
-    # ------------------------------------------------------------ computation --
-
-    def compute_scenario(self, scenario_id, scenario_dir, criteria, loader):
-        """Count features per layer type for one scenario, with and without the filter."""
-        out = {'id': scenario_id, 'label': loader.scenarios.get(scenario_id, scenario_id), 'dir': scenario_dir.name}
-
-        # Tracks and PRAs: elevation and aspect (numeric degrees)
-        for key, pattern, elev_field, aspect_field in (
-                ('tracks', "tracks_*.shp", "pra_elev", "pra_aspdeg"),
-                ('pras', "pra_*.shp", "elev_med", "aspect_deg")):
-            shp = loader._find_file(scenario_dir, pattern)
-            if not shp:
-                out[key] = None
-                arcpy.AddWarning(f"  Scenario {scenario_id}: {pattern} not found")
-                continue
-            cols, total = read_dbf_columns(shp.with_suffix(".dbf"), [elev_field, aspect_field])
-            matched = 0
-            for elev, asp in zip(cols[elev_field], cols[aspect_field]):
-                if self.matches_numeric(to_number(elev), to_number(asp), criteria):
-                    matched += 1
-            out[key] = {'total': total, 'matched': matched}
-
-        # Risk assessment: buildings
-        risk_dir = scenario_dir / "risk_assessment"
-        risk_shp = loader._find_file(risk_dir, "risk_*.shp") if risk_dir.exists() else None
-        if not risk_shp:
-            out['risk'] = None
-            arcpy.AddWarning(f"  Scenario {scenario_id}: risk assessment not found")
-            return out
-
-        fields = ["saf_class", "max_ppr", "pra_elev", "pra_aspct"]
-        cols, total = read_dbf_columns(risk_shp.with_suffix(".dbf"), fields)
-        saf_counts = {}
-        ppr_counts = {label: 0 for label, _, _ in self.PPR_CLASSES}
-        ppr_values = []
-        for saf, ppr, elev, asp in zip(cols["saf_class"], cols["max_ppr"], cols["pra_elev"], cols["pra_aspct"]):
-            if not self.matches_risk(saf, ppr, elev, asp, criteria):
-                continue
-            saf_counts[saf or "Unknown"] = saf_counts.get(saf or "Unknown", 0) + 1
-            value = ppr if ppr is not None else 0.0
-            ppr_values.append(value)
-            for label, lo, hi in self.PPR_CLASSES:
-                if value >= lo and (hi is None or value < hi):
-                    ppr_counts[label] += 1
-                    break
-        out['risk'] = {
-            'total': total, 'matched': len(ppr_values), 'saf': saf_counts, 'ppr_classes': ppr_counts,
-            'ppr_max': max(ppr_values) if ppr_values else None,
-            'ppr_mean': (sum(ppr_values) / len(ppr_values)) if ppr_values else None,
-        }
-        return out
-
-    @staticmethod
-    def _in_elevation(elev, criteria):
-        lo, hi = criteria['elev_min'], criteria['elev_max']
-        if lo is None and hi is None:
-            return True
-        if elev is None:
-            return False
-        return (lo is None or elev >= lo) and (hi is None or elev <= hi)
-
-    def matches_numeric(self, elev, aspect, criteria):
-        """Tracks / PRAs: same logic as the SQL built by Filter Layers (numeric aspect in degrees)."""
-        if not self._in_elevation(elev, criteria):
-            return False
-        aspect_type = criteria['aspect_type']
-        if aspect_type == "Cardinal Directions" and criteria['cardinal']:
-            if aspect is None:
-                return False
-            # [lo, hi), except that a range ending at 360 also includes 360
-            return any(aspect >= lo and (aspect < hi or (hi >= 360 and aspect <= hi))
-                       for lo, hi in merged_cardinal_ranges(criteria['cardinal']))
-        if aspect_type == "Degree Range" and criteria['aspect_min'] is not None and criteria['aspect_max'] is not None:
-            if aspect is None:
-                return False
-            lo, hi = criteria['aspect_min'], criteria['aspect_max']
-            return (lo <= aspect <= hi) if lo <= hi else (aspect >= lo or aspect <= hi)
-        return True
-
-    def matches_risk(self, saf, ppr, elev, aspect_text, criteria):
-        """Buildings: elevation, safety class, max PPR and (cardinal only) aspect."""
-        if not self._in_elevation(elev, criteria):
-            return False
-        if criteria['saf_classes'] and saf not in criteria['saf_classes']:
-            return False
-        if criteria['min_max_ppr'] is not None and (ppr is None or ppr < criteria['min_max_ppr']):
-            return False
-        if criteria['aspect_type'] == "Cardinal Directions":
-            dirs = [d for d in criteria['cardinal'] if d in CARDINAL_RANGES]
-            if dirs and aspect_text not in dirs:
-                return False
-        return True
-
-    @staticmethod
-    def criteria_notes(criteria):
-        """Human readable list of the active criteria (and which layers they apply to)."""
-        notes = []
-        if criteria['elev_min'] is not None or criteria['elev_max'] is not None:
-            lo = "-" if criteria['elev_min'] is None else f"{criteria['elev_min']:g}"
-            hi = "-" if criteria['elev_max'] is None else f"{criteria['elev_max']:g}"
-            notes.append(f"Elevation: {lo} to {hi} m (tracks, PRAs, buildings)")
-        if criteria['aspect_type'] == "Cardinal Directions" and criteria['cardinal']:
-            notes.append(f"Aspect: {', '.join(criteria['cardinal'])} (tracks, PRAs, buildings)")
-        elif criteria['aspect_type'] == "Degree Range" and criteria['aspect_min'] is not None \
-                and criteria['aspect_max'] is not None:
-            notes.append(f"Aspect: {criteria['aspect_min']:g} to {criteria['aspect_max']:g} degrees "
-                         f"(tracks and PRAs only; not available for buildings)")
-        if criteria['saf_classes']:
-            notes.append(f"Safety class: {', '.join(criteria['saf_classes'])} (buildings only)")
-        if criteria['min_max_ppr'] is not None:
-            notes.append(f"Max PPR at least {criteria['min_max_ppr']:g} kPa (buildings only)")
-        if not notes:
-            notes.append("No filter - all features")
-        return notes
-
-    # ------------------------------------------------------------------ output --
-
-    @staticmethod
-    def _fmt_count(info):
-        if info is None:
-            return "n/a"
-        return f"{info['matched']:,} / {info['total']:,}"
-
-    @staticmethod
-    def _fmt_num(value, digits=1):
-        return "-" if value is None else f"{value:,.{digits}f}"
-
-    def build_rows(self, results):
-        """Table rows: (kind, label, [one value per scenario]); kind is 'section' or 'row'."""
-        rows = []
-        rows.append(("section", "Features (filtered / total)", None))
-        rows.append(("row", "Avalanche tracks", [self._fmt_count(r.get('tracks')) for r in results]))
-        rows.append(("row", "PRAs", [self._fmt_count(r.get('pras')) for r in results]))
-        rows.append(("row", "Buildings", [self._fmt_count(r.get('risk')) for r in results]))
-
-        saf_classes = sorted({c for r in results if r.get('risk') for c in r['risk']['saf']})
-        rows.append(("section", "Buildings by safety class (filtered)", None))
-        for cls in saf_classes:
-            rows.append(("row", cls, [str(r['risk']['saf'].get(cls, 0)) if r.get('risk') else "n/a" for r in results]))
-        if not saf_classes:
-            rows.append(("row", "-", ["-" for _ in results]))
-
-        rows.append(("section", "Buildings by max PPR (filtered)", None))
-        for label, _, _ in self.PPR_CLASSES:
-            rows.append(("row", label, [str(r['risk']['ppr_classes'][label]) if r.get('risk') else "n/a" for r in results]))
-        rows.append(("row", "Max PPR [kPa]", [self._fmt_num(r['risk']['ppr_max']) if r.get('risk') else "n/a" for r in results]))
-        rows.append(("row", "Mean PPR [kPa]", [self._fmt_num(r['risk']['ppr_mean']) if r.get('risk') else "n/a" for r in results]))
-        return rows
-
-    def _print_table(self, rows, results):
-        arcpy.AddMessage("")
-        header = f"{'':32}" + "".join(f"{r['id']:>18}" for r in results)
-        arcpy.AddMessage(header)
-        for kind, label, values in rows:
-            if kind == "section":
-                arcpy.AddMessage(f"-- {label}")
-            else:
-                arcpy.AddMessage(f"{label:32}" + "".join(f"{v:>18}" for v in values))
-
-    def write_csv(self, path, results, rows):
-        import csv
-        with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-            writer = csv.writer(fh, delimiter=";")
-            writer.writerow(["Metric"] + [f"{r['id']} ({r['dir']})" for r in results])
-            for kind, label, values in rows:
-                writer.writerow([label] + ([""] * len(results) if kind == "section" else values))
-
-    def write_html(self, path, region, results, rows, notes):
-        from html import escape
-        head = "".join(f"<th>{escape(r['id'])}<br><small>{escape(r['label'])}</small></th>" for r in results)
-        body = []
-        for kind, label, values in rows:
-            if kind == "section":
-                body.append(f'<tr class="section"><td colspan="{len(results) + 1}">{escape(label)}</td></tr>')
-            else:
-                cells = "".join(f"<td>{escape(v)}</td>" for v in values)
-                body.append(f"<tr><td>{escape(label)}</td>{cells}</tr>")
-        note_items = "".join(f"<li>{escape(n)}</li>" for n in notes)
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Scenario comparison - {escape(region)}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-        h1 {{ color: #333; }}
-        table {{ border-collapse: collapse; margin: 10px 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 6px 12px; text-align: right; }}
-        th:first-child, td:first-child {{ text-align: left; }}
-        th {{ background-color: #4CAF50; color: white; }}
-        tr.section td {{ background-color: #e7f3fe; font-weight: bold; text-align: left; }}
-        .filter {{ background-color: #f2f2f2; padding: 10px 15px; border-left: 6px solid #2196F3; }}
-        small {{ font-weight: normal; }}
-    </style>
-</head>
-<body>
-    <h1>Scenario comparison: {escape(region)}</h1>
-    <p>Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-    <div class="filter"><strong>Filter applied to every scenario</strong><ul>{note_items}</ul></div>
-    <table>
-        <tr><th>Metric</th>{head}</tr>
-        {"".join(body)}
-    </table>
-</body>
-</html>
-"""
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(html)

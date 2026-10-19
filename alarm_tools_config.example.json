@@ -1,0 +1,10 @@
+{
+    "results_base": "L:\\ALARM\\Results",
+    "scenarios": {
+        "A": "80-60, prox0, rel1.2m",
+        "B": "80-60, prox0, rel1.8m",
+        "C": "80-60, prox100, rel2.3m",
+        "D": "75-55, prox0, rel2.3m",
+        "E": "75-55, prox150, rel2.3m"
+    }
+}

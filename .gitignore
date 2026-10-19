@@ -37,3 +37,7 @@ desktop.ini
 
 # ArcGIS Pro regenerates these metadata files whenever a toolbox is opened or run
 *.pyt.xml
+
+# Personal overrides and test caches
+alarm_tools_config.json
+.pytest_cache/
