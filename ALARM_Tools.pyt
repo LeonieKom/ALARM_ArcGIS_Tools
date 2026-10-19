@@ -227,7 +227,9 @@ class LoadALARMData(object):
         # Load PPR Raster
         if "PPR Raster" in data_types:
             ppr_file = self._find_file(scenario_dir, "ppr_*.tif")
-            if ppr_file:
+            if ppr_file and self._already_loaded(map_obj, ppr_file):
+                pass
+            elif ppr_file:
                 arcpy.AddMessage(f"Loading PPR raster: {ppr_file.name}")
                 layer = map_obj.addDataFromPath(str(ppr_file))
                 # The pipeline's .lyrx is the single source of truth for PPR colors;
@@ -247,7 +249,9 @@ class LoadALARMData(object):
         for label, prefix in (("PFV Raster", "pfv"), ("PFT Raster", "pft")):
             if label in data_types:
                 raster_file = self._find_file(scenario_dir, f"{prefix}_*.tif")
-                if raster_file:
+                if raster_file and self._already_loaded(map_obj, raster_file):
+                    pass
+                elif raster_file:
                     arcpy.AddMessage(f"Loading {label}: {raster_file.name}")
                     layer = map_obj.addDataFromPath(str(raster_file))
                     self._apply_lyrx(layer, raster_file.with_suffix(".lyrx"))
@@ -258,7 +262,9 @@ class LoadALARMData(object):
         # Load Tracks
         if "Tracks" in data_types:
             tracks_file = self._find_file(scenario_dir, "tracks_*.shp")
-            if tracks_file:
+            if tracks_file and self._already_loaded(map_obj, tracks_file):
+                pass
+            elif tracks_file:
                 arcpy.AddMessage(f"Loading tracks: {tracks_file.name}")
                 layer = map_obj.addDataFromPath(str(tracks_file))
                 self._apply_tracks_symbology(layer)
@@ -291,10 +297,11 @@ class LoadALARMData(object):
                     arcpy.AddMessage(f"  Converted to: {fc_path}")
 
                 # Load from geodatabase instead of shapefile
-                layer = map_obj.addDataFromPath(fc_path)
-                layer.name = base_name
-                self._apply_pra_symbology(layer)
-                layers_added.append(layer)
+                if not self._already_loaded(map_obj, fc_path):
+                    layer = map_obj.addDataFromPath(fc_path)
+                    layer.name = base_name
+                    self._apply_pra_symbology(layer)
+                    layers_added.append(layer)
             else:
                 arcpy.AddWarning("PRA shapefile not found")
 
@@ -303,7 +310,9 @@ class LoadALARMData(object):
             risk_dir = scenario_dir / "risk_assessment"
             if risk_dir.exists():
                 risk_file = self._find_file(risk_dir, "risk_*.shp")
-                if risk_file:
+                if risk_file and self._already_loaded(map_obj, risk_file):
+                    pass
+                elif risk_file:
                     arcpy.AddMessage(f"Loading risk assessment: {risk_file.name}")
                     layer = map_obj.addDataFromPath(str(risk_file))
                     self._apply_risk_symbology(layer)
@@ -349,6 +358,24 @@ class LoadALARMData(object):
         arcpy.AddMessage(f"Successfully loaded {len(layers_added)} layers")
 
         return
+
+    def _already_loaded(self, map_obj, path):
+        """True (with a message) if a layer of the active map already shows this file.
+
+        Loading the same scenario twice used to add every layer a second time.
+        """
+        target = os.path.normcase(os.path.normpath(str(path)))
+        for lyr in map_obj.listLayers():
+            try:
+                if lyr.isGroupLayer or not lyr.supports("DATASOURCE"):
+                    continue
+                if os.path.normcase(os.path.normpath(lyr.dataSource)) == target:
+                    arcpy.AddMessage(f"  Already in the map as '{lyr.longName}' - skipped "
+                                     f"(remove that layer to load it again)")
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _get_completed_regions(self):
         """Regions with merged data (completed or partial)."""

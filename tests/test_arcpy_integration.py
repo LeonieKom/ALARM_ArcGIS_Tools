@@ -170,6 +170,14 @@ def test_second_load_uses_the_cache(loaded):
     assert cached_seconds < max(10, loaded.first_load_seconds / 3)
 
 
+def test_loading_the_same_scenario_again_adds_nothing(loaded, capfd):
+    before = sorted(l.longName for l in loaded.map.listLayers())
+    capfd.readouterr()
+    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["Tracks", "PRAs", "Risk Assessment"]), P(True)], None)
+    assert sorted(l.longName for l in loaded.map.listLayers()) == before
+    assert "".join(capfd.readouterr()).count("Already in the map") == 3
+
+
 def test_no_spatial_index_files_are_written_into_the_results_folder(loaded):
     assert {p.name for p in _sdir.glob("*.sb[nx]")} == loaded.sbn_before
 
