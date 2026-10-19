@@ -261,6 +261,25 @@ def test_a_failing_filter_keeps_the_previous_filter(loaded, monkeypatch, fail_on
     assert feature_layers(loaded)[loaded.tracks].definitionQuery == "pra_elev >= 100"
 
 
+def test_a_selection_is_reported_by_filter_and_export(loaded, tmp_path, capfd):
+    reset_all(loaded)
+    risk_layer = feature_layers(loaded)[loaded.risk]
+    oids = [row[0] for row in arcpy.da.SearchCursor(risk_layer, ["OID@"])][:3]
+    risk_layer.setSelectionSet(oids, "NEW")
+    try:
+        assert loaded.mod._selection_count(risk_layer) == 3
+        capfd.readouterr()
+        run_filter(loaded, [loaded.risk], f.make_criteria(min_max_ppr=0), counts=True)
+        assert "3 features are selected" in "".join(capfd.readouterr())
+        loaded.mod.ExportFilteredData().execute([P(feature_layers(loaded)[loaded.risk]), P(str(tmp_path)), P("sel")], None)
+        assert "only the selected features are exported" in "".join(capfd.readouterr())
+        assert int(arcpy.management.GetCount(str(tmp_path / "sel.shp"))[0]) == 3
+    finally:
+        feature_layers(loaded)[loaded.risk].setSelectionSet([], "NEW")
+        reset_all(loaded)
+    assert loaded.mod._selection_count(feature_layers(loaded)[loaded.risk]) == 0
+
+
 def test_unknown_layer_name_only_warns(loaded):
     tool = loaded.mod.FilterLayers()
     tool.execute([P(["no such layer"]), P(100), P(None), P("None"), P(None), P(None), P(None), P(None), P(None),

@@ -39,6 +39,19 @@ for _module in (_config, _data, _dbf, _filters, _compare):
     importlib.reload(_module)
 
 
+def _selection_count(layer):
+    """Number of selected features of a map layer (0 if none or not determinable).
+
+    Counting, exporting and reading a layer only use the selected features while a
+    selection exists, so the tools point this out.
+    """
+    try:
+        selection = layer.getSelectionSet()
+    except Exception:
+        return 0
+    return len(selection) if selection else 0
+
+
 def _split_values(text):
     """Values of a multi-value parameter (valueAsText is 'a;b;c', values may be quoted)."""
     if not text:
@@ -769,6 +782,10 @@ class FilterLayers(object):
                     # paths with dots in the file name are not resolvable.
                     total = before = None
                     if count_features:
+                        selected = _selection_count(layer)
+                        if selected:
+                            arcpy.AddWarning(f"  {layer.name}: {selected} features are selected - the counts below only "
+                                             f"include the selection (the filter itself applies to all features)")
                         layer.definitionQuery = ""
                         total = before = self._count(layer)
                         if previous_query:
@@ -910,6 +927,11 @@ class ExportFilteredData(object):
             arcpy.AddMessage(f"Active filter: {layer.definitionQuery}")
         else:
             arcpy.AddMessage("No filter active - exporting all features")
+
+        selected = _selection_count(layer)
+        if selected:
+            arcpy.AddWarning(f"{selected} features are selected in '{layer.name}' - only the selected features "
+                             f"are exported. Clear the selection to export everything the filter shows.")
 
         try:
             # Export the layer (respects definitionQuery automatically)
