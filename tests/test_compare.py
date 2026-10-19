@@ -109,7 +109,7 @@ def test_rows_have_one_value_per_scenario(tmp_path):
         if kind == "row":
             assert len(values) == 2, label
     by_label = {label: values for kind, label, values in rows if kind == "row"}
-    assert by_label["Buildings"] == ["3 / 5", "1 / 2"]
+    assert by_label["Buildings in risk assessment"] == ["3 / 5", "1 / 2"]
     assert by_label["S3"] == ["2", "0"]            # a class missing in one scenario is shown as 0
 
 
@@ -117,7 +117,7 @@ def test_text_table(tmp_path):
     crit, results = two_scenarios(tmp_path)
     lines = compare.table_lines(compare.build_rows(results), results)
     assert lines[0].split() == ["A", "D"]
-    assert any(l.startswith("Buildings") and "3 / 5" in l for l in lines)
+    assert any(l.startswith("Buildings in risk assessment") and "3 / 5" in l for l in lines)
 
 
 def test_csv(tmp_path):
@@ -126,7 +126,7 @@ def test_csv(tmp_path):
     compare.write_csv(path, results, compare.build_rows(results))
     rows = list(csv.reader(open(path, encoding="utf-8-sig"), delimiter=";"))
     assert rows[0] == ["Metric", "A (A_80-60_prox0_rel1.2m)", "D (D_75-55_prox0_rel2.3m)"]
-    assert ["Buildings", "3 / 5", "1 / 2"] in rows
+    assert ["Buildings in risk assessment", "3 / 5", "1 / 2"] in rows
 
 
 def test_html_contains_filter_and_is_escaped(tmp_path):

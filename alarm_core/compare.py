@@ -92,7 +92,7 @@ def build_rows(results):
     rows = [("section", "Features (filtered / total)", None),
             ("row", "Avalanche tracks", [_fmt_count(r.get('tracks')) for r in results]),
             ("row", "PRAs", [_fmt_count(r.get('pras')) for r in results]),
-            ("row", "Buildings", [_fmt_count(r.get('risk')) for r in results])]
+            ("row", "Buildings in risk assessment", [_fmt_count(r.get('risk')) for r in results])]
 
     saf_classes = sorted({c for r in results if r.get('risk') for c in r['risk']['saf']})
     rows.append(("section", "Buildings by safety class (filtered)", None))
@@ -104,8 +104,8 @@ def build_rows(results):
     rows.append(("section", "Buildings by max PPR (filtered)", None))
     for label, _, _ in PPR_CLASSES:
         rows.append(("row", label, [str(r['risk']['ppr_classes'][label]) if r.get('risk') else "n/a" for r in results]))
-    rows.append(("row", "Max PPR [kPa]", [_fmt_num(r['risk']['ppr_max']) if r.get('risk') else "n/a" for r in results]))
-    rows.append(("row", "Mean PPR [kPa]", [_fmt_num(r['risk']['ppr_mean']) if r.get('risk') else "n/a" for r in results]))
+    rows.append(("row", "Highest max PPR [kPa]", [_fmt_num(r['risk']['ppr_max']) if r.get('risk') else "n/a" for r in results]))
+    rows.append(("row", "Mean of max PPR [kPa]", [_fmt_num(r['risk']['ppr_mean']) if r.get('risk') else "n/a" for r in results]))
     return rows
 
 

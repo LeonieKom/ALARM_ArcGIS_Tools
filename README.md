@@ -170,9 +170,9 @@ Compares the scenarios of one region side by side with **one shared filter**. It
 - **Output Directory** and **Report Format** (HTML, CSV or both)
 
 **What you get** (one column per scenario):
-- Avalanche tracks, PRAs and buildings: filtered / total
+- Avalanche tracks, PRAs and buildings in the risk assessment: filtered / total (the buildings listed in the scenario's risk assessment, not all buildings of the region)
 - Buildings by safety class and by max PPR class (filtered)
-- Max and mean PPR of the filtered buildings
+- Highest and mean max PPR (`max_ppr`) of the filtered buildings
 - The applied filter is written at the top of the HTML report
 
 **Notes:**
