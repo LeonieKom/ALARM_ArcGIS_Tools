@@ -270,7 +270,7 @@ Keep the `alarm_core` folder next to `ALARM_Tools.pyt`. After editing code, use 
 Run the tests with ArcGIS Pro's Python:
 
 ```
-"C:\Program Files\ArcGIS\Proin\Python\Scripts\propy.bat" -m pytest tests
+"C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
 - Without anything else, 65 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
