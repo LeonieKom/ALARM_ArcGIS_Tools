@@ -25,7 +25,7 @@ Larger rework: filtering step by step, a real scenario comparison, the `alarm_co
 - Dialog checks in Filter Layers and Compare Scenarios (min above max, missing directions or degree values, out-of-range values); Load ALARM Data skips files that are already in the map
 - `alarm_core` package with the logic that does not need arcpy (config, data lookup, .dbf reader, filters, comparison); `ALARM_Tools.pyt` shrank from about 1760 to 1360 lines
 - Central configuration: results folder and scenarios can be changed in `alarm_tools_config.json` or via `ALARM_RESULTS_BASE`, no code edit needed
-- Test suite (`tests/`): 81 tests without arcpy and 24 integration tests; the SQL filters and the Python filters are checked against each other
+- Test suite (`tests/`): 88 tests without arcpy and 27 integration tests; the SQL filters and the Python filters are checked against each other
 - Compare Scenarios: now a real comparison. One shared filter is applied to all scenarios of a region; the result is an HTML/CSV table (tracks, PRAs, buildings by safety class and max PPR). Replaces the previous swipe/side-by-side instructions
 - Load ALARM Data: the converted PRA copy is cached in the project geodatabase (keyed on the shapefile's modification time and size). First load ~1 min for a large region, later loads under a second; the cache is rebuilt when the source changes
 - Filter Layers: aspect filter (cardinal directions) for Risk Assessment via `pra_aspct`; option to switch feature counting off
