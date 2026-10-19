@@ -5,7 +5,9 @@ All notable changes to the ALARM ArcGIS Tools will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-19
+
+Larger rework: filtering step by step, a real scenario comparison, the `alarm_core` package with tests, and several fixes for wrong or misleading results. The "Update Overview" tool was removed (see below); scenario descriptions in the dialogs changed, so saved tool parameters may need to be set again.
 
 ### Fixed
 - Filter Layers: if applying a filter failed, the layer lost its previous filter (or kept the broken one); the previous filter is restored now
@@ -61,17 +63,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known Issues
 - None
 
----
-
-## Future Releases
-
-### [1.1.0] - Planned
-- Add batch processing for multiple regions
-- Export symbology to layer files (.lyrx)
-- Custom symbology editor
-- Integration with QGIS (optional)
-
-### [1.2.0] - Planned
-- Automated report generation
-- Statistics dashboard
-- Comparison tools for scenarios

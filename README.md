@@ -186,16 +186,11 @@ Compares the scenarios of one region side by side with **one shared filter**. It
 ### PPR / PFV / PFT Rasters
 Styled from the `.lyrx` file the pipeline writes next to each raster (single source of truth), e.g.
 `ppr_<region>_<scenario>_max.lyrx`. PPR classes: < 1, 1-3, 3-10, 10-20, 20-30, 30-60, > 60 kPa.
-If the `.lyrx` is missing, PPR falls back to a built-in 5-class scale.
+If the `.lyrx` is missing, PPR falls back to a built-in scale (breaks 0.1, 1, 10, 25, 50 kPa; below 0.1 kPa transparent).
 
 ### Tracks (Avalanche Paths)
 - **Field**: `med_pres` (median pressure)
-- **Scale**: Logarithmic blue gradient
-  - **25-50 kPa**: #e0f3ff
-  - **50-100 kPa**: #99d6ff
-  - **100-200 kPa**: #4da6ff
-  - **200-400 kPa**: #0066cc
-  - **> 400 kPa**: #003d7a
+- **Scale**: five blue classes, light to dark: 0-50, 50-100, 100-200, 200-500, > 500 kPa
 - **Opacity**: 90%
 
 ### PRAs (Potential Release Areas)
@@ -302,6 +297,12 @@ The ALARM pipeline processes 5 scenarios per region:
 - Verify file paths don't contain special characters
 - Ensure you have read permissions for the data directory
 
+### "No module named 'alarm_core'"
+- The `alarm_core` folder must be next to `ALARM_Tools.pyt` (copy both, not only the .pyt)
+
+### Changes to the code do not show up
+- Right-click the toolbox in the Catalog pane -> *Refresh*; if that is not enough, restart ArcGIS Pro
+
 ### "Symbology not applied"
 - Check that layer type matches selected symbology
 - Verify field names exist in the attribute table
@@ -309,8 +310,8 @@ The ALARM pipeline processes 5 scenarios per region:
 
 ## Requirements
 
-- **ArcGIS Pro** 2.8 or later
-- **Python** 3.7+ (included with ArcGIS Pro)
+- **ArcGIS Pro** 3.0 or later (uses `ExportFeatures`, available since 3.0; tested with 3.5)
+- **Python** 3.9+ (included with ArcGIS Pro 3.x)
 - **Network access** to `L:\ALARM\Results`
 
 ## Contributing
@@ -335,9 +336,8 @@ MIT License - See LICENSE file for details
 
 For questions or issues:
 - Open an issue on GitHub
-- Contact: [Your contact information]
 
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: April 2026
+**Version**: 2.0.0  
+**Last Updated**: October 2026
