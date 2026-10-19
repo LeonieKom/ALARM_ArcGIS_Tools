@@ -259,6 +259,7 @@ alarm_core/            everything that does not need arcpy
     dbf.py             .dbf reader
     filters.py         filter criteria: SQL for the layers + the same logic in Python
     compare.py         scenario comparison and its HTML/CSV tables
+    report.py          statistics report for a Risk Assessment layer
 tests/                 pytest
 alarm_tools_config.example.json
 ```
@@ -273,7 +274,7 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 65 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 81 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
 - A filter change must be made in `alarm_core/filters.py` once; the SQL builders and the Python predicates live side by side there, and `test_filters.py` fails if they disagree.
 
