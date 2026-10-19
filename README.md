@@ -46,8 +46,9 @@ For permanent access:
 Loads data for a specific region and scenario with automatic symbology.
 
 **Parameters:**
-- **Region**: Select from available regions (e.g., Vest_Finnmark, Nord_Troms)
-- **Scenario**: Select scenario (A, B, C, D, E)
+- **Regions**: one or several regions (e.g., Vest_Finnmark, Nord_Troms)
+- **Scenarios**: one or several scenarios (A, B, C, D, E)
+  - Every selected region is combined with every selected scenario; each combination gets its own group layer. A combination without data is skipped with a warning.
 - **Data Types**: Choose which layers to load (PPR Raster, PFV Raster, PFT Raster, Tracks, PRAs, Risk Assessment). PFV/PFT use the `.lyrx` next to the raster.
 - **Add to Group Layer**: Organize layers in a group (default: Yes)
 

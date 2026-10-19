@@ -21,6 +21,7 @@ Larger rework: filtering step by step, a real scenario comparison, the `alarm_co
 - Load ALARM Data no longer writes spatial index files (`.sbn/.sbx`) into the results folders on `L:`
 
 ### Added
+- Load ALARM Data: several regions and/or scenarios in one run (every region x scenario combination gets its own group layer; combinations without data are skipped with a warning)
 - GitHub Actions workflow that runs the tests without arcpy on every push
 - Dialog checks in Filter Layers and Compare Scenarios (min above max, missing directions or degree values, out-of-range values); Load ALARM Data skips files that are already in the map
 - `alarm_core` package with the logic that does not need arcpy (config, data lookup, .dbf reader, filters, comparison); `ALARM_Tools.pyt` shrank from about 1760 to 1360 lines

@@ -178,6 +178,28 @@ def test_loading_the_same_scenario_again_adds_nothing(loaded, capfd):
     assert "".join(capfd.readouterr()).count("Already in the map") == 3
 
 
+def test_several_regions_and_scenarios_load_in_one_run(env, capfd):
+    """2 regions x 2 scenarios (+ one that does not exist): one group per combination."""
+    regions = ["03_Nord_Troms", "04_Lyngen"]
+    if not all(data.find_scenario_dir(_cfg['results_base'], r, sid) for r in regions for sid in "AB"):
+        pytest.skip("regions 03_Nord_Troms / 04_Lyngen with scenarios A and B not available")
+    capfd.readouterr()
+    env.mod.LoadALARMData().execute(
+        [P(regions), P(["A - x", "B - x", "Z - not a scenario"]), P(["Tracks"]), P(True)], None)
+    out = "".join(capfd.readouterr())
+    groups = sorted(l.name for l in env.map.listLayers() if l.isGroupLayer)
+    for r in regions:
+        for sid in "AB":
+            assert f"{r} - Scenario {sid}" in groups
+    assert not any("Scenario Z" in g for g in groups)
+    tracks = [l for l in env.map.listLayers() if l.isFeatureLayer and l.name.startswith("tracks_0") and
+              any(r in l.name for r in regions)]
+    assert len(tracks) == 4
+    assert "Loading 6 region/scenario combination(s): 2 region(s) x 3 scenario(s)" in out
+    assert "Successfully loaded 4 layers from 4 of 6 combination(s)" in out
+    assert "No data for: 03_Nord_Troms / Z, 04_Lyngen / Z" in out
+
+
 def test_no_spatial_index_files_are_written_into_the_results_folder(loaded):
     assert {p.name for p in _sdir.glob("*.sb[nx]")} == loaded.sbn_before
 

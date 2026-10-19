@@ -130,11 +130,12 @@ class LoadALARMData(object):
 
         # Parameter 0: Region
         param0 = arcpy.Parameter(
-            displayName="Region",
+            displayName="Regions",
             name="region",
             datatype="GPString",
             parameterType="Required",
-            direction="Input")
+            direction="Input",
+            multiValue=True)
 
         # Get list of completed regions
         regions = self._get_completed_regions()
@@ -143,11 +144,12 @@ class LoadALARMData(object):
 
         # Parameter 1: Scenario
         param1 = arcpy.Parameter(
-            displayName="Scenario",
+            displayName="Scenarios",
             name="scenario",
             datatype="GPString",
             parameterType="Required",
-            direction="Input")
+            direction="Input",
+            multiValue=True)
 
         param1.filter.type = "ValueList"
         param1.filter.list = [f"{k} - {v}" for k, v in self.scenarios.items()]
@@ -193,34 +195,49 @@ class LoadALARMData(object):
         return
 
     def execute(self, parameters, messages):
-        """The source code of the tool."""
-
-        # Get parameters
-        region = parameters[0].valueAsText
-        scenario_full = parameters[1].valueAsText
-        scenario_id = scenario_full.split(' - ')[0]  # Extract 'A' from 'A - (80-60, prox0, rel1.2m)'
-        # Strip quotes and whitespace from data types
+        """Load every selected region/scenario combination into the active map."""
+        regions = _split_values(parameters[0].valueAsText)
+        scenario_ids = [v.split(' - ')[0] for v in _split_values(parameters[1].valueAsText)]
         data_types = _split_values(parameters[2].valueAsText)
         use_group = parameters[3].value
 
-        arcpy.AddMessage(f"Loading data for {region}, Scenario {scenario_id}")
-        arcpy.AddMessage(f"Data types to load: {data_types}")
-
-        # Find scenario directory
-        scenario_dir = self._find_scenario_dir(region, scenario_id)
-        if not scenario_dir:
-            arcpy.AddError(f"Could not find data for {region}, Scenario {scenario_id}")
-            return
-
-        arcpy.AddMessage(f"Found data directory: {scenario_dir}")
-
-        # Get current map
         aprx = arcpy.mp.ArcGISProject("CURRENT")
         map_obj = aprx.activeMap
-
         if not map_obj:
             arcpy.AddError("No active map found. Please open a map in ArcGIS Pro.")
             return
+
+        combinations = [(r, sid) for r in regions for sid in scenario_ids]
+        arcpy.AddMessage(f"Loading {len(combinations)} region/scenario combination(s): "
+                         f"{len(regions)} region(s) x {len(scenario_ids)} scenario(s)")
+        arcpy.AddMessage(f"Data types to load: {data_types}")
+        if "PRAs" in data_types and len(combinations) > 1:
+            arcpy.AddMessage("PRAs are converted once per region/scenario (about a minute for a large region); "
+                             "later loads use the cached copy.")
+
+        total_layers = 0
+        missing = []
+        for number, (region, scenario_id) in enumerate(combinations, start=1):
+            arcpy.AddMessage("")
+            arcpy.AddMessage(f"[{number}/{len(combinations)}] {region}, Scenario {scenario_id}")
+            scenario_dir = self._find_scenario_dir(region, scenario_id)
+            if not scenario_dir:
+                arcpy.AddWarning(f"  No data found for {region}, Scenario {scenario_id} - skipped")
+                missing.append(f"{region} / {scenario_id}")
+                continue
+            total_layers += self._load_scenario(region, scenario_id, scenario_dir, data_types, use_group,
+                                                aprx, map_obj)
+
+        arcpy.AddMessage("")
+        arcpy.AddMessage(f"Successfully loaded {total_layers} layers from "
+                         f"{len(combinations) - len(missing)} of {len(combinations)} combination(s)")
+        if missing:
+            arcpy.AddWarning(f"No data for: {', '.join(missing)}")
+        return
+
+    def _load_scenario(self, region, scenario_id, scenario_dir, data_types, use_group, aprx, map_obj):
+        """Load the selected data of one region/scenario; returns the number of layers added."""
+        arcpy.AddMessage(f"Found data directory: {scenario_dir}")
 
         layers_added = []
 
@@ -355,9 +372,7 @@ class LoadALARMData(object):
             except Exception as e:
                 arcpy.AddWarning(f"Could not organize group layer: {e}")
 
-        arcpy.AddMessage(f"Successfully loaded {len(layers_added)} layers")
-
-        return
+        return len(layers_added)
 
     def _already_loaded(self, map_obj, path):
         """True (with a message) if a layer of the active map already shows this file.
