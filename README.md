@@ -26,7 +26,7 @@ This toolbox provides easy access to ALARM pipeline outputs directly within ArcG
 
 3. Add the toolbox:
    - **Catalog Pane** → **Toolboxes** → Right-click → **Add Toolbox**
-   - Navigate to `ALARM_Tools.pyt`
+   - Navigate to `ALARM_Tools.pyt` (keep the `alarm_core` folder next to it)
    - Click **OK**
 
 4. The toolbox will appear under "Toolboxes" in the Catalog pane
@@ -242,12 +242,40 @@ Note on file names: newer pipeline runs write result files without dots (`..._re
 
 ## Configuration
 
-The toolbox reads results from `L:\ALARM\Results`. To change this, edit the configuration section in `ALARM_Tools.pyt`:
+By default the toolbox reads the results from `L:\ALARM\Results` and knows scenarios A-E. To change this **without editing code**:
 
-```python
-# Configuration
-self.results_base = Path(r"L:\ALARM\Results")
+- copy `alarm_tools_config.example.json` to `alarm_tools_config.json` (next to `ALARM_Tools.pyt`) and edit it, or
+- set the environment variable `ALARM_RESULTS_BASE`.
+
+The environment variable wins over the JSON file, which wins over the defaults. A broken JSON file is reported with its file name. `alarm_tools_config.json` is not tracked by git.
+
+## Project layout
+
 ```
+ALARM_Tools.pyt        the toolbox: parameters, messages, map handling (needs arcpy)
+alarm_core/            everything that does not need arcpy
+    config.py          results folder and scenarios
+    data.py            finding regions, scenario folders and files
+    dbf.py             .dbf reader
+    filters.py         filter criteria: SQL for the layers + the same logic in Python
+    compare.py         scenario comparison and its HTML/CSV tables
+tests/                 pytest
+alarm_tools_config.example.json
+```
+
+Keep the `alarm_core` folder next to `ALARM_Tools.pyt`. After editing code, use *Refresh* on the toolbox in the Catalog pane; the `alarm_core` modules are reloaded then (restart Pro if a change does not show up).
+
+## Development
+
+Run the tests with ArcGIS Pro's Python:
+
+```
+"C:\Program Files\ArcGIS\Proin\Python\Scripts\propy.bat" -m pytest tests
+```
+
+- Without anything else, 65 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
+- A filter change must be made in `alarm_core/filters.py` once; the SQL builders and the Python predicates live side by side there, and `test_filters.py` fails if they disagree.
 
 ## Scenarios
 
