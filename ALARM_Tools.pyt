@@ -317,8 +317,8 @@ class LoadALARMData(object):
         return _data.find_scenario_dir(self.results_base, region, scenario_id)
 
     def _find_file(self, directory, pattern):
-        """First file in the directory matching the pattern, or None."""
-        return _data.find_file(directory, pattern)
+        """The result file in the directory matching the pattern (backups skipped), or None."""
+        return _data.find_file(directory, pattern, warn=arcpy.AddWarning)
 
     def _delete_old_pra_caches(self, gdb_path, base_name):
         """Remove cached PRA copies of this region/scenario that belong to an older source file."""

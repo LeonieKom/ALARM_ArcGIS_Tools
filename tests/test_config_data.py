@@ -92,5 +92,39 @@ def test_find_scenario_dir_does_not_match_a_longer_id(tmp_path):
 def test_find_file(tmp_path):
     (tmp_path / "tracks_b.shp").touch()
     (tmp_path / "tracks_a.shp").touch()
-    assert data.find_file(tmp_path, "tracks_*.shp").name == "tracks_a.shp"      # deterministic
+    warnings = []
+    assert data.find_file(tmp_path, "tracks_*.shp", warn=warnings.append).name == "tracks_a.shp"   # deterministic
+    assert len(warnings) == 1 and "tracks_b.shp" in warnings[0]                                   # and reported
     assert data.find_file(tmp_path, "pra_*.shp") is None
+
+
+@pytest.mark.parametrize("backup", [
+    "risk_R_D_rel1.2m.backup.shp",          # reprocess_cell.py (found on L: for 01_Finnmarkskysten A-C)
+    "risk_R_D_rel1_2m.backup.shp",
+    "risk_R_D_rel1_2m_ALT.shp",             # incremental_remerge.py
+    "risk_R_D_rel1_2m_NEU.shp",
+    "risk_R_D_rel1_2m_backup.shp",
+])
+def test_backups_are_never_chosen(tmp_path, backup):
+    real = "risk_R_D_rel1.2m.shp" if "1.2m" in backup else "risk_R_D_rel1_2m.shp"
+    (tmp_path / backup).touch()
+    (tmp_path / real).touch()
+    warnings = []
+    assert data.find_file(tmp_path, "risk_*.shp", warn=warnings.append).name == real
+    assert warnings == []
+
+
+def test_only_a_backup_means_no_file(tmp_path):
+    (tmp_path / "ppr_R_D_max.backup.tif").touch()
+    assert data.find_file(tmp_path, "ppr_*.tif") is None
+
+
+def test_other_result_types_with_the_same_prefix_are_skipped(tmp_path):
+    for name in ("pra_binary_R_D.shp", "pra_R_D.shp", "risk_assessment_R_D.shp", "risk_R_D.shp"):
+        (tmp_path / name).touch()
+    assert data.find_file(tmp_path, "pra_*.shp").name == "pra_R_D.shp"
+    assert data.find_file(tmp_path, "risk_*.shp").name == "risk_R_D.shp"
+    # lower-case region names would sort after 'binary'/'assessment' - still correct
+    (tmp_path / "pra_R_D.shp").unlink()
+    (tmp_path / "pra_zz.shp").touch()
+    assert data.find_file(tmp_path, "pra_*.shp").name == "pra_zz.shp"

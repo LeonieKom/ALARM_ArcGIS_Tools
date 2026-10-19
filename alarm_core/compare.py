@@ -34,7 +34,7 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
 
     # Tracks and PRAs: elevation and aspect
     for key, pattern, elev_field, aspect_field in NUMERIC_LAYERS:
-        shp = find_file(scenario_dir, pattern)
+        shp = find_file(scenario_dir, pattern, warn=warn)
         if not shp:
             out[key] = None
             warn(f"  Scenario {scenario_id}: {pattern} not found")
@@ -46,7 +46,7 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
 
     # Risk assessment: buildings
     risk_dir = scenario_dir / "risk_assessment"
-    risk_shp = find_file(risk_dir, "risk_*.shp") if risk_dir.exists() else None
+    risk_shp = find_file(risk_dir, "risk_*.shp", warn=warn) if risk_dir.exists() else None
     if not risk_shp:
         out['risk'] = None
         warn(f"  Scenario {scenario_id}: risk assessment not found")

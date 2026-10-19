@@ -69,6 +69,19 @@ def test_empty_result_has_no_statistics(sdir):
     assert r['risk']['matched'] == 0 and r['risk']['ppr_max'] is None and r['risk']['ppr_mean'] is None
 
 
+def test_a_backup_risk_table_is_not_used(sdir):
+    """reprocess_cell.py leaves '<name>.backup.shp' next to the risk table; it sorts first."""
+    from dbf_fixture import write_dbf
+    real = next((sdir / "risk_assessment").glob("risk_*.dbf"))
+    backup = real.with_name(real.stem + ".backup.dbf")
+    assert sorted([real.name, backup.name])[0] == backup.name              # the trap: it sorts first
+    write_dbf(backup, [("saf_class", "C", 4, 0), ("max_ppr", "N", 12, 3), ("pra_elev", "N", 12, 3),
+                       ("pra_aspct", "C", 4, 0)], [("S1", 1.0, 1.0, "N")])
+    backup.with_suffix(".shp").touch()
+    r = compare.compute_scenario("D", sdir, f.make_criteria())
+    assert r['risk']['total'] == len(RISK)
+
+
 def test_missing_files_warn_and_give_none(tmp_path):
     (tmp_path / "S").mkdir()
     warnings = []
