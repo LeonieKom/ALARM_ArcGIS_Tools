@@ -288,12 +288,27 @@ def test_unknown_layer_name_only_warns(loaded):
 
 # ----------------------------------------------------------------- report / export --
 
-def test_report_writes_html_and_csv(loaded, tmp_path):
+def test_report_writes_html_and_csv_and_states_the_filter(loaded, tmp_path):
     reset_all(loaded)
+    run_filter(loaded, [loaded.risk], f.make_criteria(min_max_ppr=10))
     risk_layer = feature_layers(loaded)[loaded.risk]
     loaded.mod.GenerateReport().execute([P(risk_layer), P(str(tmp_path)), P("Both")], None)
-    names = [p.suffix for p in tmp_path.iterdir()]
-    assert ".html" in names and ".csv" in names
+    html = next(tmp_path.glob("risk_report_*.html"))
+    csv_file = next(tmp_path.glob("risk_report_*.csv"))
+    assert "risk_" + REGION in html.name                                  # layer name in the file name
+    text = html.read_text(encoding="utf-8")
+    assert "max_ppr &gt;= 10" in text
+    expected = compare.compute_scenario(SCEN, _sdir, f.make_criteria(min_max_ppr=10))['risk']['matched']
+    assert f"Total Buildings Analyzed:</strong> {expected}<" in text
+    assert "max_ppr >= 10" in csv_file.read_text(encoding="utf-8")
+    reset_all(loaded)
+
+
+def test_report_on_a_non_risk_layer_gives_a_clear_error(loaded, tmp_path, capfd):
+    tracks_layer = feature_layers(loaded)[loaded.tracks]
+    loaded.mod.GenerateReport().execute([P(tracks_layer), P(str(tmp_path)), P("HTML")], None)
+    assert "is it a Risk Assessment layer?" in "".join(capfd.readouterr())
+    assert not list(tmp_path.glob("*.html"))
 
 
 def test_export_respects_the_filter_and_sanitizes_the_name(loaded, tmp_path):

@@ -32,10 +32,11 @@ import alarm_core.data as _data
 import alarm_core.dbf as _dbf
 import alarm_core.filters as _filters
 import alarm_core.compare as _compare
+import alarm_core.report as _report
 
 # ArcGIS Pro keeps imported modules for the whole session. Reloading them here makes
 # "Refresh" of the toolbox pick up edits without restarting Pro.
-for _module in (_config, _data, _dbf, _filters, _compare):
+for _module in (_config, _data, _dbf, _filters, _compare, _report):
     importlib.reload(_module)
 
 
@@ -1004,252 +1005,46 @@ class GenerateReport(object):
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
-        from collections import defaultdict
-
-        # Get parameters
         layer = parameters[0].value
         output_dir = parameters[1].valueAsText
         report_format = parameters[2].valueAsText
 
         arcpy.AddMessage(f"Analyzing layer: {layer.name}")
-
-        # Check if layer has definition query (filter)
-        if hasattr(layer, 'definitionQuery') and layer.definitionQuery:
-            arcpy.AddMessage(f"Active filter: {layer.definitionQuery}")
-
-        # Collect statistics
-        stats = {
-            'total_count': 0,
-            'safety_class': defaultdict(int),
-            'ppr_categories': defaultdict(int),
-            'elevation_ranges': defaultdict(int),
-            'aspect_categories': defaultdict(int),
-            'max_ppr_values': [],
-            'mean_ppr_values': [],
-            'pra_elev_values': []
-        }
+        definition_query = getattr(layer, 'definitionQuery', "") or ""
+        if definition_query:
+            arcpy.AddMessage(f"Active filter: {definition_query}")
+        selected = _selection_count(layer)
+        if selected:
+            arcpy.AddWarning(f"{selected} features are selected in '{layer.name}' - the report only covers the "
+                             f"selection. Clear the selection to report everything the filter shows.")
 
         try:
-            # Read all features
-            fields = ['saf_class', 'max_ppr', 'mean_ppr', 'pra_elev', 'pra_aspct']
-
-            with arcpy.da.SearchCursor(layer, fields) as cursor:
-                for row in cursor:
-                    stats['total_count'] += 1
-
-                    # Safety class
-                    saf_class = row[0] if row[0] else 'Unknown'
-                    stats['safety_class'][saf_class] += 1
-
-                    # PPR categories
-                    max_ppr = row[1] if row[1] is not None else 0
-                    stats['max_ppr_values'].append(max_ppr)
-                    if max_ppr < 25:
-                        stats['ppr_categories']['0-25 kPa'] += 1
-                    elif max_ppr < 50:
-                        stats['ppr_categories']['25-50 kPa'] += 1
-                    elif max_ppr < 100:
-                        stats['ppr_categories']['50-100 kPa'] += 1
-                    elif max_ppr < 200:
-                        stats['ppr_categories']['100-200 kPa'] += 1
-                    else:
-                        stats['ppr_categories']['>200 kPa'] += 1
-
-                    # Mean PPR
-                    if row[2] is not None:
-                        stats['mean_ppr_values'].append(row[2])
-
-                    # Elevation ranges
-                    pra_elev = row[3] if row[3] is not None else 0
-                    stats['pra_elev_values'].append(pra_elev)
-                    if pra_elev < 500:
-                        stats['elevation_ranges']['<500m'] += 1
-                    elif pra_elev < 1000:
-                        stats['elevation_ranges']['500-1000m'] += 1
-                    elif pra_elev < 1500:
-                        stats['elevation_ranges']['1000-1500m'] += 1
-                    elif pra_elev < 2000:
-                        stats['elevation_ranges']['1500-2000m'] += 1
-                    else:
-                        stats['elevation_ranges']['>2000m'] += 1
-
-                    # Aspect categories (pra_aspct is String field with cardinal directions)
-                    aspect_str = row[4] if row[4] else 'Unknown'
-                    # Map string aspect to cardinal direction
-                    if aspect_str and aspect_str != 'Unknown':
-                        try:
-                            # If it's a numeric string, convert to cardinal direction
-                            aspect_deg = float(aspect_str)
-                            if aspect_deg >= 337.5 or aspect_deg < 22.5:
-                                cardinal = 'N'
-                            elif aspect_deg < 67.5:
-                                cardinal = 'NE'
-                            elif aspect_deg < 112.5:
-                                cardinal = 'E'
-                            elif aspect_deg < 157.5:
-                                cardinal = 'SE'
-                            elif aspect_deg < 202.5:
-                                cardinal = 'S'
-                            elif aspect_deg < 247.5:
-                                cardinal = 'SW'
-                            elif aspect_deg < 292.5:
-                                cardinal = 'W'
-                            else:
-                                cardinal = 'NW'
-                            stats['aspect_categories'][cardinal] += 1
-                        except (ValueError, TypeError):
-                            # If it's already a cardinal direction string, use it
-                            stats['aspect_categories'][aspect_str] += 1
-                    else:
-                        stats['aspect_categories']['Unknown'] += 1
-
-            arcpy.AddMessage(f"Analyzed {stats['total_count']} buildings")
-
-            # Generate reports
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-            if report_format in ["HTML", "Both"]:
-                html_path = os.path.join(output_dir, f"risk_report_{timestamp}.html")
-                self._generate_html_report(stats, html_path, layer.name)
-                arcpy.AddMessage(f"HTML report: {html_path}")
-
-            if report_format in ["CSV", "Both"]:
-                csv_path = os.path.join(output_dir, f"risk_report_{timestamp}.csv")
-                self._generate_csv_report(stats, csv_path)
-                arcpy.AddMessage(f"CSV report: {csv_path}")
-
+            # The cursor respects the layer's filter and selection
+            with arcpy.da.SearchCursor(layer, _report.FIELDS) as cursor:
+                stats = _report.collect(cursor)
         except Exception as e:
-            arcpy.AddError(f"Report generation failed: {e}")
-            import traceback
-            arcpy.AddError(traceback.format_exc())
+            arcpy.AddError(f"Could not read {', '.join(_report.FIELDS)} from '{layer.name}' - "
+                           f"is it a Risk Assessment layer? ({e})")
+            return
 
+        arcpy.AddMessage(f"Analyzed {stats['total']} buildings")
+        if stats['elevation'][_report.UNKNOWN]:
+            arcpy.AddWarning(f"{stats['elevation'][_report.UNKNOWN]} buildings have no elevation (listed as Unknown)")
+
+        source = getattr(layer, 'dataSource', None)
+        context = _report.context_lines(layer.name, definition_query, selected, source)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layer.name}_{timestamp}")
+
+        if report_format in ["HTML", "Both"]:
+            html_path = os.path.join(output_dir, base + ".html")
+            _report.write_html(html_path, stats, context)
+            arcpy.AddMessage(f"HTML report: {html_path}")
+        if report_format in ["CSV", "Both"]:
+            csv_path = os.path.join(output_dir, base + ".csv")
+            _report.write_csv(csv_path, stats, context)
+            arcpy.AddMessage(f"CSV report: {csv_path}")
         return
-
-    def _generate_html_report(self, stats, output_path, layer_name):
-        """Generate HTML report."""
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>Risk Assessment Report - {layer_name}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-        h1 {{ color: #333; }}
-        h2 {{ color: #666; margin-top: 30px; }}
-        table {{ border-collapse: collapse; width: 100%; max-width: 600px; margin: 10px 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #4CAF50; color: white; }}
-        tr:nth-child(even) {{ background-color: #f2f2f2; }}
-        .summary {{ background-color: #e7f3fe; padding: 15px; border-left: 6px solid #2196F3; margin: 20px 0; }}
-    </style>
-</head>
-<body>
-    <h1>Risk Assessment Report</h1>
-    <p><strong>Layer:</strong> {layer_name}</p>
-    <p><strong>Generated:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-
-    <div class="summary">
-        <h2>Summary</h2>
-        <p><strong>Total Buildings Analyzed:</strong> {stats['total_count']}</p>
-        <p><strong>Max PPR Range:</strong> {min(stats['max_ppr_values']) if stats['max_ppr_values'] else 0:.2f} - {max(stats['max_ppr_values']) if stats['max_ppr_values'] else 0:.2f} kPa</p>
-        <p><strong>Mean PPR Average:</strong> {sum(stats['mean_ppr_values'])/len(stats['mean_ppr_values']) if stats['mean_ppr_values'] else 0:.2f} kPa</p>
-        <p><strong>Elevation Range:</strong> {min(stats['pra_elev_values']) if stats['pra_elev_values'] else 0:.0f} - {max(stats['pra_elev_values']) if stats['pra_elev_values'] else 0:.0f} m</p>
-    </div>
-
-    <h2>Buildings by Safety Class</h2>
-    <table>
-        <tr><th>Safety Class</th><th>Count</th><th>Percentage</th></tr>
-"""
-        for saf_class, count in sorted(stats['safety_class'].items()):
-            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-            html += f"        <tr><td>{saf_class}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
-
-        html += """    </table>
-
-    <h2>Buildings by PPR Category</h2>
-    <table>
-        <tr><th>PPR Range</th><th>Count</th><th>Percentage</th></tr>
-"""
-        ppr_order = ['0-25 kPa', '25-50 kPa', '50-100 kPa', '100-200 kPa', '>200 kPa']
-        for category in ppr_order:
-            count = stats['ppr_categories'].get(category, 0)
-            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-            html += f"        <tr><td>{category}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
-
-        html += """    </table>
-
-    <h2>Buildings by Elevation Range</h2>
-    <table>
-        <tr><th>Elevation Range</th><th>Count</th><th>Percentage</th></tr>
-"""
-        elev_order = ['<500m', '500-1000m', '1000-1500m', '1500-2000m', '>2000m']
-        for category in elev_order:
-            count = stats['elevation_ranges'].get(category, 0)
-            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-            html += f"        <tr><td>{category}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
-
-        html += """    </table>
-
-    <h2>Buildings by Aspect</h2>
-    <table>
-        <tr><th>Aspect</th><th>Count</th><th>Percentage</th></tr>
-"""
-        for aspect, count in sorted(stats['aspect_categories'].items()):
-            pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-            html += f"        <tr><td>{aspect}</td><td>{count}</td><td>{pct:.1f}%</td></tr>\n"
-
-        html += """    </table>
-</body>
-</html>
-"""
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(html)
-
-    def _generate_csv_report(self, stats, output_path):
-        """Generate CSV report."""
-        import csv
-
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-
-            # Summary
-            writer.writerow(['SUMMARY'])
-            writer.writerow(['Total Buildings', stats['total_count']])
-            writer.writerow(['Max PPR Min', min(stats['max_ppr_values']) if stats['max_ppr_values'] else 0])
-            writer.writerow(['Max PPR Max', max(stats['max_ppr_values']) if stats['max_ppr_values'] else 0])
-            writer.writerow(['Mean PPR Avg', sum(stats['mean_ppr_values'])/len(stats['mean_ppr_values']) if stats['mean_ppr_values'] else 0])
-            writer.writerow([])
-
-            # Safety Class
-            writer.writerow(['SAFETY CLASS', 'Count', 'Percentage'])
-            for saf_class, count in sorted(stats['safety_class'].items()):
-                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-                writer.writerow([saf_class, count, f"{pct:.1f}%"])
-            writer.writerow([])
-
-            # PPR Categories
-            writer.writerow(['PPR CATEGORY', 'Count', 'Percentage'])
-            ppr_order = ['0-25 kPa', '25-50 kPa', '50-100 kPa', '100-200 kPa', '>200 kPa']
-            for category in ppr_order:
-                count = stats['ppr_categories'].get(category, 0)
-                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-                writer.writerow([category, count, f"{pct:.1f}%"])
-            writer.writerow([])
-
-            # Elevation
-            writer.writerow(['ELEVATION RANGE', 'Count', 'Percentage'])
-            elev_order = ['<500m', '500-1000m', '1000-1500m', '1500-2000m', '>2000m']
-            for category in elev_order:
-                count = stats['elevation_ranges'].get(category, 0)
-                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-                writer.writerow([category, count, f"{pct:.1f}%"])
-            writer.writerow([])
-
-            # Aspect
-            writer.writerow(['ASPECT', 'Count', 'Percentage'])
-            for aspect, count in sorted(stats['aspect_categories'].items()):
-                pct = (count / stats['total_count'] * 100) if stats['total_count'] > 0 else 0
-                writer.writerow([aspect, count, f"{pct:.1f}%"])
 
 
 class CompareScenarios(object):
