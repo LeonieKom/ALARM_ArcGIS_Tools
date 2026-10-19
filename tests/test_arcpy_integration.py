@@ -240,6 +240,27 @@ def test_filter_works_without_counting(loaded):
     assert feature_layers(loaded)[loaded.tracks].definitionQuery == "pra_elev >= 100"
 
 
+@pytest.mark.parametrize("fail_on_call", [1, 2, 3])
+def test_a_failing_filter_keeps_the_previous_filter(loaded, monkeypatch, fail_on_call):
+    """Counting changes the query temporarily; an error at any count must restore the old filter."""
+    tool_cls = loaded.mod.FilterLayers
+    reset_all(loaded)
+    run_filter(loaded, [loaded.tracks], f.make_criteria(elev_min=100))
+    calls = {"n": 0}
+    real_count = tool_cls._count
+
+    def failing_count(self, layer):
+        calls["n"] += 1
+        if calls["n"] == fail_on_call:
+            raise RuntimeError("simulated failure")
+        return real_count(self, layer)
+
+    monkeypatch.setattr(tool_cls, "_count", failing_count)
+    run_filter(loaded, [loaded.tracks], f.make_criteria(elev_max=900), mode=tool_cls.MODE_REFINE, counts=True)
+    assert calls["n"] == fail_on_call
+    assert feature_layers(loaded)[loaded.tracks].definitionQuery == "pra_elev >= 100"
+
+
 def test_unknown_layer_name_only_warns(loaded):
     tool = loaded.mod.FilterLayers()
     tool.execute([P(["no such layer"]), P(100), P(None), P("None"), P(None), P(None), P(None), P(None), P(None),

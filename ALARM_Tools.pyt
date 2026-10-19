@@ -758,8 +758,8 @@ class FilterLayers(object):
                     arcpy.AddWarning(f"  {layer.name}: no filter criteria apply to this layer type - skipped")
                     continue
 
+                previous_query = layer.definitionQuery or ""
                 try:
-                    previous_query = layer.definitionQuery or ""
                     # Refine: keep the filter that is already on the layer and add the new one
                     if refine:
                         filter_query = _filters.combine_refine(previous_query, filter_query)
@@ -790,8 +790,15 @@ class FilterLayers(object):
                             arcpy.AddWarning(f"    Filter matches 0 features for {layer.name} - too restrictive?")
                     layers_filtered += 1
                 except Exception as e:
+                    # Counting changes the definition query temporarily; never leave the
+                    # layer without its previous filter or with a broken one.
+                    try:
+                        layer.definitionQuery = previous_query
+                    except Exception:
+                        pass
                     arcpy.AddWarning(f"  Failed to apply filter to {layer.name}: {e}")
                     arcpy.AddWarning(f"  Query was: {filter_query}")
+                    arcpy.AddWarning(f"  The previous filter was kept: {previous_query or '(none)'}")
 
         if layers_filtered == 0:
             arcpy.AddWarning("No layers were changed.")
