@@ -37,6 +37,45 @@ def make_criteria(elev_min=None, elev_max=None, aspect_type=ASPECT_NONE, cardina
     }
 
 
+def validate(criteria, require_any=False):
+    """Problems with the criteria, for the tool dialog: [(key, 'error'|'warning', message)].
+
+    key is a criteria key (the tool shows the message at that parameter) or 'any' for
+    "no criterion set" (only reported with require_any, e.g. in Filter Layers).
+    """
+    problems = []
+    lo, hi = criteria['elev_min'], criteria['elev_max']
+    if lo is not None and hi is not None and lo > hi:
+        problems.append(('elev_max', 'error', f"Maximum elevation ({hi:g}) is lower than the minimum ({lo:g})."))
+
+    if criteria['aspect_type'] == ASPECT_CARDINAL and not criteria['cardinal']:
+        problems.append(('cardinal', 'error', "Select at least one direction (or set Aspect Filter Type to None)."))
+
+    if criteria['aspect_type'] == ASPECT_DEGREES:
+        for key in ('aspect_min', 'aspect_max'):
+            value = criteria[key]
+            if value is None:
+                problems.append((key, 'error', "Required for a degree range."))
+            elif not 0 <= value <= 360:
+                problems.append((key, 'error', "Must be between 0 and 360 degrees."))
+
+    if criteria['min_max_ppr'] is not None and criteria['min_max_ppr'] < 0:
+        problems.append(('min_max_ppr', 'error', "Pressure cannot be negative."))
+
+    if require_any and not problems and not has_any(criteria):
+        problems.append(('any', 'warning', "No filter criterion is set - the layers would not be changed."))
+    return problems
+
+
+def has_any(criteria):
+    """True if at least one criterion would restrict the features."""
+    return any([criteria['elev_min'] is not None, criteria['elev_max'] is not None,
+                criteria['aspect_type'] == ASPECT_CARDINAL and bool(criteria['cardinal']),
+                criteria['aspect_type'] == ASPECT_DEGREES and criteria['aspect_min'] is not None
+                and criteria['aspect_max'] is not None,
+                bool(criteria['saf_classes']), criteria['min_max_ppr'] is not None])
+
+
 def merged_cardinal_ranges(directions):
     """Degree ranges for the given cardinal directions, neighbouring ones merged.
 

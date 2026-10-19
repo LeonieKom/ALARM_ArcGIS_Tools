@@ -151,3 +151,51 @@ def test_criteria_notes():
     assert any("Max PPR at least 25 kPa" in n for n in notes)
     degrees = f.criteria_notes(f.make_criteria(aspect_type=f.ASPECT_DEGREES, aspect_min=10, aspect_max=20))
     assert any("not available for buildings" in n for n in degrees)
+
+
+# ------------------------------------------------------------------- validation --
+
+def keys(problems):
+    return [(k, level) for k, level, _ in problems]
+
+
+def test_valid_criteria_have_no_problems():
+    assert f.validate(f.make_criteria(elev_min=100, elev_max=900)) == []
+    assert f.validate(f.make_criteria(aspect_type=f.ASPECT_DEGREES, aspect_min=0, aspect_max=360)) == []
+    assert f.validate(f.make_criteria()) == []                        # comparing without a filter is fine
+
+
+def test_min_above_max():
+    assert keys(f.validate(f.make_criteria(elev_min=900, elev_max=100))) == [('elev_max', 'error')]
+    assert f.validate(f.make_criteria(elev_min=500, elev_max=500)) == []
+
+
+def test_cardinal_without_directions():
+    assert keys(f.validate(f.make_criteria(aspect_type=f.ASPECT_CARDINAL))) == [('cardinal', 'error')]
+
+
+def test_degree_range_needs_both_values_in_0_360():
+    assert keys(f.validate(f.make_criteria(aspect_type=f.ASPECT_DEGREES, aspect_min=10))) == [('aspect_max', 'error')]
+    assert keys(f.validate(f.make_criteria(aspect_type=f.ASPECT_DEGREES))) == [('aspect_min', 'error'), ('aspect_max', 'error')]
+    assert keys(f.validate(f.make_criteria(aspect_type=f.ASPECT_DEGREES, aspect_min=-5, aspect_max=400))) == [
+        ('aspect_min', 'error'), ('aspect_max', 'error')]
+    # values of a disabled degree range do not matter
+    assert f.validate(f.make_criteria(aspect_min=-5)) == []
+
+
+def test_negative_pressure():
+    assert keys(f.validate(f.make_criteria(min_max_ppr=-1))) == [('min_max_ppr', 'error')]
+
+
+def test_require_any():
+    assert keys(f.validate(f.make_criteria(), require_any=True)) == [('any', 'warning')]
+    assert f.validate(f.make_criteria(saf_classes=["S3"]), require_any=True) == []
+    # an aspect type without values is an error, not additionally "no criterion"
+    assert keys(f.validate(f.make_criteria(aspect_type=f.ASPECT_CARDINAL), require_any=True)) == [('cardinal', 'error')]
+
+
+def test_has_any_matches_the_queries():
+    """has_any() is True exactly when one of the queries restricts something."""
+    for c in NUMERIC_CASES + RISK_CASES:
+        restricts = f.numeric_query(c, "e", "a") is not None or f.risk_query(c) is not None
+        assert f.has_any(c) == restricts, c

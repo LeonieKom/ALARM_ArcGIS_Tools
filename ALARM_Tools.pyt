@@ -53,6 +53,46 @@ def _selection_count(layer):
     return len(selection) if selection else 0
 
 
+# Parameter index of each filter criterion in the two tools that use the criteria
+_FILTER_PARAMS = dict(any=0, elev_min=1, elev_max=2, aspect_type=3, cardinal=4, aspect_min=5, aspect_max=6,
+                      saf_classes=7, min_max_ppr=8)
+_COMPARE_PARAMS = dict(elev_min=2, elev_max=3, aspect_type=4, cardinal=5, aspect_min=6, aspect_max=7,
+                       saf_classes=8, min_max_ppr=9)
+
+
+def _criteria_from(parameters, index):
+    """Filter criteria from the tool parameters (index: criteria key -> parameter position)."""
+    def p(key):
+        return parameters[index[key]]
+    return _filters.make_criteria(
+        elev_min=p('elev_min').value,
+        elev_max=p('elev_max').value,
+        aspect_type=p('aspect_type').valueAsText if p('aspect_type').value else _filters.ASPECT_NONE,
+        cardinal=_split_values(p('cardinal').valueAsText),
+        aspect_min=p('aspect_min').value,
+        aspect_max=p('aspect_max').value,
+        saf_classes=_split_values(p('saf_classes').valueAsText),
+        min_max_ppr=p('min_max_ppr').value)
+
+
+def _show_validation(parameters, index, require_any=False):
+    """Show problems with the criteria at the affected parameters (in updateMessages)."""
+    for key, level, message in _filters.validate(_criteria_from(parameters, index), require_any):
+        if key not in index:
+            continue
+        param = parameters[index[key]]
+        if level == "error":
+            param.setErrorMessage(message)
+        else:
+            param.setWarningMessage(message)
+
+
+def _check_region(param):
+    """The region list shows 'No regions found' when the results folder is not reachable."""
+    if param.valueAsText == "No regions found":
+        param.setErrorMessage("No regions found - is the results folder (L:) reachable? See alarm_core/config.py.")
+
+
 def _split_values(text):
     """Values of a multi-value parameter (valueAsText is 'a;b;c', values may be quoted)."""
     if not text:
@@ -149,6 +189,7 @@ class LoadALARMData(object):
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
         parameter."""
+        _check_region(parameters[0])
         return
 
     def execute(self, parameters, messages):
@@ -692,7 +733,9 @@ class FilterLayers(object):
         return
 
     def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool parameter."""
+        """Check the criteria before the tool runs (not needed for a reset)."""
+        if parameters[9].valueAsText != self.MODE_RESET:
+            _show_validation(parameters, _FILTER_PARAMS, require_any=True)
         return
 
     def execute(self, parameters, messages):
@@ -700,15 +743,7 @@ class FilterLayers(object):
 
         # Get parameters
         layer_names = _split_values(parameters[0].valueAsText)
-        criteria = _filters.make_criteria(
-            elev_min=parameters[1].value,
-            elev_max=parameters[2].value,
-            aspect_type=parameters[3].valueAsText if parameters[3].value else _filters.ASPECT_NONE,
-            cardinal=_split_values(parameters[4].valueAsText),
-            aspect_min=parameters[5].value,
-            aspect_max=parameters[6].value,
-            saf_classes=_split_values(parameters[7].valueAsText),
-            min_max_ppr=parameters[8].value)
+        criteria = _criteria_from(parameters, _FILTER_PARAMS)
         mode = parameters[9].valueAsText or self.MODE_REFINE
         count_features = bool(parameters[10].value) if parameters[10].value is not None else True
         reset = mode == self.MODE_RESET
@@ -1097,9 +1132,13 @@ class CompareScenarios(object):
 
         param6 = arcpy.Parameter(displayName="Aspect Min (degrees)", name="aspect_min", datatype="GPDouble",
                                  parameterType="Optional", direction="Input")
+        param6.filter.type = "Range"
+        param6.filter.list = [0, 360]
         param6.enabled = False
         param7 = arcpy.Parameter(displayName="Aspect Max (degrees)", name="aspect_max", datatype="GPDouble",
                                  parameterType="Optional", direction="Input")
+        param7.filter.type = "Range"
+        param7.filter.list = [0, 360]
         param7.enabled = False
 
         param8 = arcpy.Parameter(displayName="Building Safety Class (Risk Assessment)", name="saf_class",
@@ -1135,22 +1174,16 @@ class CompareScenarios(object):
         return
 
     def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool parameter."""
+        """Check region and criteria before the tool runs."""
+        _check_region(parameters[0])
+        _show_validation(parameters, _COMPARE_PARAMS)
         return
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
         region = parameters[0].valueAsText
         scenario_ids = [v.split(' - ')[0] for v in _split_values(parameters[1].valueAsText)]
-        criteria = _filters.make_criteria(
-            elev_min=parameters[2].value,
-            elev_max=parameters[3].value,
-            aspect_type=parameters[4].valueAsText if parameters[4].value else _filters.ASPECT_NONE,
-            cardinal=_split_values(parameters[5].valueAsText),
-            aspect_min=parameters[6].value,
-            aspect_max=parameters[7].value,
-            saf_classes=_split_values(parameters[8].valueAsText),
-            min_max_ppr=parameters[9].value)
+        criteria = _criteria_from(parameters, _COMPARE_PARAMS)
         output_dir = parameters[10].valueAsText
         report_format = parameters[11].valueAsText
 

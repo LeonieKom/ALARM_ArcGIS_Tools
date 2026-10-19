@@ -41,6 +41,13 @@ class P:
     def __init__(self, value=None):
         self.value = value
         self.enabled = True
+        self.error = self.warning = None
+
+    def setErrorMessage(self, message):
+        self.error = message
+
+    def setWarningMessage(self, message):
+        self.warning = message
 
     @property
     def valueAsText(self):
@@ -278,6 +285,43 @@ def test_a_selection_is_reported_by_filter_and_export(loaded, tmp_path, capfd):
         feature_layers(loaded)[loaded.risk].setSelectionSet([], "NEW")
         reset_all(loaded)
     assert loaded.mod._selection_count(feature_layers(loaded)[loaded.risk]) == 0
+
+
+def filter_params(**kw):
+    c = f.make_criteria(**kw)
+    return [P(["x"]), P(c['elev_min']), P(c['elev_max']), P(c['aspect_type']), P(c['cardinal'] or None),
+            P(c['aspect_min']), P(c['aspect_max']), P(c['saf_classes'] or None), P(c['min_max_ppr']),
+            P("Replace existing filter"), P(False)]
+
+
+def test_filter_dialog_shows_problems_at_the_right_parameter(env):
+    tool = env.mod.FilterLayers()
+    params = filter_params(elev_min=900, elev_max=100)
+    tool.updateMessages(params)
+    assert params[2].error and "lower than the minimum" in params[2].error
+    params = filter_params(aspect_type=f.ASPECT_CARDINAL)
+    tool.updateMessages(params)
+    assert params[4].error
+    params = filter_params()
+    tool.updateMessages(params)
+    assert params[0].warning and "No filter criterion" in params[0].warning
+    params = filter_params()
+    params[9] = P(tool.MODE_RESET)
+    tool.updateMessages(params)                             # a reset needs no criteria
+    assert params[0].warning is None
+    params = filter_params(elev_min=100)
+    tool.updateMessages(params)
+    assert all(p.error is None and p.warning is None for p in params)
+
+
+def test_compare_dialog_checks_region_and_degree_range(env, tmp_path):
+    tool = env.mod.CompareScenarios()
+    params = [P("No regions found"), P(["D - x"]), P(None), P(None), P(f.ASPECT_DEGREES), P(None), P(10), P(None),
+              P(None), P(None), P(str(tmp_path)), P("HTML")]
+    tool.updateMessages(params)
+    assert params[0].error and "No regions found" in params[0].error
+    assert params[7].error == "Required for a degree range."
+    assert params[6].error is None
 
 
 def test_unknown_layer_name_only_warns(loaded):
