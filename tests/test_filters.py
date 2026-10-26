@@ -139,6 +139,56 @@ def test_risk_sql_equals_python(criteria):
     assert sql == py
 
 
+# ------------------------------------------------- tracks of several PRAs (clusters) --
+
+def test_degree_range_classes():
+    assert f.degree_range_classes(60, 120) == ["NE", "E", "SE"]
+    assert f.degree_range_classes(350, 10) == ["N"]
+    assert f.degree_range_classes(22.5, 22.5) == ["NE"]          # boundaries are half-open
+    assert f.degree_range_classes(300, 30) == ["N", "NE", "NW"]
+    assert sorted(f.degree_range_classes(0, 360)) == sorted(ALL_DIRS)
+
+
+def test_track_query_without_member_fields_is_the_numeric_query():
+    criteria = f.make_criteria(elev_min=100, aspect_type=f.ASPECT_CARDINAL, cardinal=["S"])
+    assert f.track_query(criteria, has_members=False) == f.numeric_query(criteria, "pra_elev", "pra_aspdeg")
+    assert f.track_query(f.make_criteria(), has_members=True) is None
+
+
+def test_cluster_track_passes_when_any_member_matches():
+    sw = f.make_criteria(aspect_type=f.ASPECT_CARDINAL, cardinal=["SW"])
+    w = f.make_criteria(aspect_type=f.ASPECT_CARDINAL, cardinal=["W"])
+    # cluster S + SW whose largest member is S (pra_aspdeg 180)
+    assert f.matches_track(400, 180, 2, ",S,SW,", 380, 450, sw)
+    assert not f.matches_track(400, 180, 2, ",S,SW,", 380, 450, w)
+    # elevation: the member range has to overlap the filter
+    assert f.matches_track(400, 180, 2, ",S,SW,", 380, 450, f.make_criteria(elev_min=440))
+    assert not f.matches_track(400, 180, 2, ",S,SW,", 380, 450, f.make_criteria(elev_min=460))
+
+
+# pra_elev, pra_aspdeg, n_pras, asp_set, elev_lo, elev_hi
+TRACK_ROWS = (
+    [(e, a, 1, None, e, e) for e in (50.0, 300.0, 800.0) for a in ASPECTS[::10]]
+    + [(e, a, None, None, None, None) for e in (300.0,) for a in ASPECTS[::30]]
+    + [(e, 180.0, 2, s, lo, hi)
+       for e, lo, hi in ((300.0, 280.0, 340.0), (90.0, 60.0, 120.0), (700.0, 650.0, 900.0))
+       for s in (",S,SW,", ",SW,W,", ",N,NE,", ",NW,N,", ",E,", ",SE,S,")]
+)
+
+
+@pytest.mark.parametrize("criteria", NUMERIC_CASES,
+                         ids=lambda c: f.track_query(c, has_members=True) or "no filter")
+def test_track_sql_equals_python(criteria):
+    db = sqlite3.connect(":memory:")
+    db.execute("create table t (pra_elev real, pra_aspdeg real, n_pras integer, asp_set text, "
+               "elev_lo real, elev_hi real)")
+    db.executemany("insert into t values (?, ?, ?, ?, ?, ?)", TRACK_ROWS)
+    query = f.track_query(criteria, has_members=True)
+    sql = db.execute("select count(*) from t" + (f" where {query}" if query else "")).fetchone()[0]
+    py = sum(1 for r in TRACK_ROWS if f.matches_track(*r, criteria))
+    assert sql == py
+
+
 # ------------------------------------------------------------------------ notes --
 
 def test_criteria_notes():

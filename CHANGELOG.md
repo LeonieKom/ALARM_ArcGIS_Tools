@@ -5,6 +5,11 @@ All notable changes to the ALARM ArcGIS Tools will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Filter Layers / Compare Scenarios: tracks of several PRAs released together (proximity scenarios C/E of the pipeline with aspect-window clusters) pass when any member PRA matches, using the new track fields `n_pras`, `asp_set`, `elev_lo`, `elev_hi`. Single-PRA tracks and older results without these fields are filtered as before
+
 ## [2.0.0] - 2026-10-19
 
 Larger rework: filtering step by step, a real scenario comparison, the `alarm_core` package with tests, and several fixes for wrong or misleading results. The "Update Overview" tool was removed (see below); scenario descriptions in the dialogs changed, so saved tool parameters may need to be set again.

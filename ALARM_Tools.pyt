@@ -830,7 +830,9 @@ class FilterLayers(object):
 
                 layer_type = self._detect_layer_type(layer)
                 if layer_type == "tracks":
-                    filter_query = _filters.numeric_query(criteria, "pra_elev", "pra_aspdeg")
+                    # cluster tracks pass when any member PRA matches (needs the member fields)
+                    filter_query = _filters.track_query(
+                        criteria, self._has_fields(layer, _filters.TRACK_MEMBER_FIELDS))
                 elif layer_type == "pras":
                     filter_query = _filters.numeric_query(criteria, "elev_med", "aspect_deg")
                 elif layer_type == "risk":
@@ -920,6 +922,13 @@ class FilterLayers(object):
         if "elev_med" in fields and "aspect_deg" in fields:
             return "pras"
         return None
+
+    def _has_fields(self, layer, field_names):
+        try:
+            fields = {f.name.lower() for f in arcpy.ListFields(layer)}
+        except Exception:
+            return False
+        return all(name.lower() in fields for name in field_names)
 
     def _is_numeric_field(self, layer, field_name):
         for f in arcpy.ListFields(layer, field_name):

@@ -129,6 +129,66 @@ def numeric_query(criteria, elev_field, aspect_field):
     return " AND ".join(conditions) if conditions else None
 
 
+# Cluster tracks (several PRAs released together, ALARM pipeline with aspect-window clusters)
+# carry these fields for all members; pra_elev/pra_aspdeg describe only the largest member.
+TRACK_MEMBER_FIELDS = ('n_pras', 'asp_set', 'elev_lo', 'elev_hi')
+
+
+def degree_range_classes(lo, hi):
+    """Aspect classes whose degree range overlaps [lo, hi] (wrapping around 0 if lo > hi)."""
+    spans = [(lo, hi)] if lo <= hi else [(lo, 360), (0, hi)]
+    classes = []
+    for name, ranges in CARDINAL_RANGES.items():
+        for a, b in ranges:
+            # class range [a, b), except that a range ending at 360 also includes 360
+            if any(a <= s_hi and (s_lo < b or (b >= 360 and s_lo <= b)) for s_lo, s_hi in spans):
+                classes.append(name)
+                break
+    return classes
+
+
+def _aspect_classes(criteria):
+    """Aspect classes selected by the criteria, or None if there is no aspect filter."""
+    if criteria['aspect_type'] == ASPECT_CARDINAL and criteria['cardinal']:
+        return [d for d in criteria['cardinal'] if d in CARDINAL_RANGES]
+    if criteria['aspect_type'] == ASPECT_DEGREES and criteria['aspect_min'] is not None \
+            and criteria['aspect_max'] is not None:
+        return degree_range_classes(criteria['aspect_min'], criteria['aspect_max'])
+    return None
+
+
+def _member_conditions(criteria):
+    """SQL conditions for cluster tracks: true if any member PRA matches."""
+    conditions = []
+    if criteria['elev_min'] is not None:
+        conditions.append(f"elev_hi >= {criteria['elev_min']}")
+    if criteria['elev_max'] is not None:
+        conditions.append(f"elev_lo <= {criteria['elev_max']}")
+    classes = _aspect_classes(criteria)
+    if classes is not None:
+        parts = [f"asp_set LIKE '%,{c},%'" for c in classes]
+        conditions.append(f"({' OR '.join(parts)})" if parts else "1 = 0")
+    return conditions
+
+
+def track_query(criteria, has_members):
+    """SQL WHERE clause for tracks, or None.
+
+    A track of a single PRA is filtered exactly on pra_elev/pra_aspdeg (as numeric_query).
+    A cluster track (n_pras > 1) passes when any member matches: its elevation range
+    overlaps the filter and one of its aspect classes is selected. A degree range is
+    applied to cluster tracks at the resolution of the eight aspect classes.
+
+    Args:
+        has_members: the layer has the TRACK_MEMBER_FIELDS (older results do not)
+    """
+    single = numeric_query(criteria, "pra_elev", "pra_aspdeg")
+    if not has_members or single is None:
+        return single
+    member = " AND ".join(_member_conditions(criteria))
+    return f"(((n_pras IS NULL OR n_pras <= 1) AND {single}) OR (n_pras > 1 AND {member}))"
+
+
 def risk_query(criteria):
     """SQL WHERE clause for the Risk Assessment layer (buildings), or None.
 
@@ -186,6 +246,22 @@ def matches_numeric(elev, aspect, criteria):
             return False
         lo, hi = criteria['aspect_min'], criteria['aspect_max']
         return (lo <= aspect <= hi) if lo <= hi else (aspect >= lo or aspect <= hi)
+    return True
+
+
+def matches_track(elev, aspect, n_pras, asp_set, elev_lo, elev_hi, criteria):
+    """Tracks: the Python equivalent of track_query (member fields may be None)."""
+    if n_pras is None or n_pras <= 1:
+        return matches_numeric(elev, aspect, criteria)
+    lo, hi = criteria['elev_min'], criteria['elev_max']
+    if lo is not None and (elev_hi is None or elev_hi < lo):
+        return False
+    if hi is not None and (elev_lo is None or elev_lo > hi):
+        return False
+    classes = _aspect_classes(criteria)
+    if classes is not None:
+        members = set((asp_set or "").strip(",").split(","))
+        return any(c in members for c in classes)
     return True
 
 

@@ -86,6 +86,7 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 **What it does:**
 - Applies SQL definition queries to selected layers
 - Uses correct field names per layer type (Tracks: `pra_elev`/`pra_aspdeg`, PRAs: `elev_med`/`aspect_deg`, Risk Assessment: `pra_elev`)
+- Tracks of several PRAs released together (`n_pras` > 1, proximity scenarios) pass when **any** member PRA matches: its elevation range (`elev_lo`-`elev_hi`) overlaps the filter and one of its aspect classes (`asp_set`, e.g. `,S,SW,`) is selected. A degree range is applied to these tracks at the resolution of the eight aspect classes. Results without these fields are filtered on the track's own PRA as before
 - Criteria within one run are combined with AND
 - **Filter Mode** controls what happens to a filter that is already on the layer:
   - *Refine existing filter* (default): the new criteria are added with AND, so you can filter step by step (e.g. first elevation, then aspect, then safety class)
@@ -270,7 +271,7 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 88 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 102 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
 - On GitHub, `.github/workflows/tests.yml` runs the tests without arcpy on every push (Windows and Linux, Python 3.9 and 3.11).
 - A filter change must be made in `alarm_core/filters.py` once; the SQL builders and the Python predicates live side by side there, and `test_filters.py` fails if they disagree.

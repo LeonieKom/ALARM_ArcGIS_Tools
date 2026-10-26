@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .data import find_file
 from .dbf import read_dbf_columns, to_number
-from .filters import criteria_notes, matches_numeric, matches_risk
+from .filters import TRACK_MEMBER_FIELDS, criteria_notes, matches_numeric, matches_risk, matches_track
 
 PPR_CLASSES = [("0-25 kPa", 0, 25), ("25-50 kPa", 25, 50), ("50-100 kPa", 50, 100),
                ("100-200 kPa", 100, 200), (">200 kPa", 200, None)]
@@ -39,7 +39,20 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
             out[key] = None
             warn(f"  Scenario {scenario_id}: {pattern} not found")
             continue
-        cols, total = read_dbf_columns(shp.with_suffix(".dbf"), [elev_field, aspect_field])
+        dbf = shp.with_suffix(".dbf")
+        if key == 'tracks':
+            try:
+                # cluster tracks: a track counts when any member PRA matches
+                cols, total = read_dbf_columns(dbf, [elev_field, aspect_field, *TRACK_MEMBER_FIELDS])
+                rows = zip(cols[elev_field], cols[aspect_field], *(cols[f] for f in TRACK_MEMBER_FIELDS))
+                matched = sum(1 for elev, asp, n, aspects, lo, hi in rows
+                              if matches_track(to_number(elev), to_number(asp), to_number(n), aspects,
+                                               to_number(lo), to_number(hi), criteria))
+                out[key] = {'total': total, 'matched': matched}
+                continue
+            except KeyError:
+                pass  # results from before cluster member fields: filter on the track's own PRA
+        cols, total = read_dbf_columns(dbf, [elev_field, aspect_field])
         matched = sum(1 for elev, asp in zip(cols[elev_field], cols[aspect_field])
                       if matches_numeric(to_number(elev), to_number(asp), criteria))
         out[key] = {'total': total, 'matched': matched}
