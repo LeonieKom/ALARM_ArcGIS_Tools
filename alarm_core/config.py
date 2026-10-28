@@ -1,11 +1,14 @@
 """Central configuration: where the results are and which scenarios exist.
 
 Defaults can be overridden without editing code:
-  * environment variable ALARM_RESULTS_BASE, or
+  * environment variables ALARM_RESULTS_BASE / ALARM_OPTIMIZED_BASE, or
   * a file alarm_tools_config.json next to ALARM_Tools.pyt, e.g.
         {"results_base": "D:\\\\ALARM\\\\Results",
          "scenarios": {"A": "80-60, prox0, rel1.2m"}}
     (see alarm_tools_config.example.json)
+
+optimized_base is where tools/optimize_results.py (pipeline repository) writes the fast
+copies; it defaults to '<results_base>_optimized'. An empty value switches them off.
 """
 
 import json
@@ -32,13 +35,14 @@ def config_path():
 
 
 def load_config(path=None, environ=None):
-    """Return {'results_base': Path, 'scenarios': dict}.
+    """Return {'results_base': Path, 'optimized_base': Path or None, 'scenarios': dict}.
 
     Precedence: environment variable > JSON file > defaults. A broken JSON file raises
     ValueError with the file name, so the problem is visible instead of silently ignored.
     """
     environ = os.environ if environ is None else environ
     results_base = DEFAULT_RESULTS_BASE
+    optimized_base = None  # None: derived from results_base below
     scenarios = dict(DEFAULT_SCENARIOS)
 
     cfg_file = Path(path) if path else config_path()
@@ -49,10 +53,19 @@ def load_config(path=None, environ=None):
             raise ValueError(f"Cannot read {cfg_file}: {exc}") from exc
         if data.get("results_base"):
             results_base = data["results_base"]
+        if "optimized_base" in data:
+            optimized_base = data["optimized_base"] or ""
         if data.get("scenarios"):
             scenarios = {str(k): str(v) for k, v in data["scenarios"].items()}
 
     if environ.get("ALARM_RESULTS_BASE"):
         results_base = environ["ALARM_RESULTS_BASE"]
+    if "ALARM_OPTIMIZED_BASE" in environ:
+        optimized_base = environ["ALARM_OPTIMIZED_BASE"]
 
-    return {'results_base': Path(results_base), 'scenarios': scenarios}
+    results_base = Path(results_base)
+    if optimized_base is None:
+        optimized_base = results_base.with_name(results_base.name + "_optimized")
+    return {'results_base': results_base,
+            'optimized_base': Path(optimized_base) if optimized_base else None,
+            'scenarios': scenarios}

@@ -56,7 +56,8 @@ Loads data for a specific region and scenario with automatic symbology.
 - Finds data in `L:\ALARM\Results\{region}\merged\{scenario}\`
 - Loads selected layers into current map
 - Applies standard ALARM symbology automatically
-- Converts PRAs to a geodatabase feature class with numeric fields; the copy is cached in the project geodatabase, so the first load of a large region takes about a minute and later loads are instant
+- Loads from the **optimized copies** in `L:\ALARM\Results_optimized\` when they are up to date (see [Optimized copies](#optimized-copies)); otherwise from the original files
+- Without an optimized copy, converts PRAs to a geodatabase feature class with numeric fields; the copy is cached in the project geodatabase, so the first load of a large region takes about a minute and later loads are instant
 
 **Example:**
 ```
@@ -246,6 +247,17 @@ By default the toolbox reads the results from `L:\ALARM\Results` and knows scena
 
 The environment variable wins over the JSON file, which wins over the defaults. A broken JSON file is reported with its file name. `alarm_tools_config.json` is not tracked by git.
 
+### Optimized copies
+
+The shapefiles on `L:` have no spatial index and the rasters are not optimized for reading over the network, so panning and zooming are slow. `tools/optimize_results.py` in the pipeline repository writes fast copies into a separate folder (default `L:\ALARM\Results_optimized\`, same `region\scenario\` layout); the originals are never changed:
+
+- rasters as Cloud-Optimized GeoTIFF (lossless, checked pixel by pixel, overviews and statistics inside the file; the `.lyrx` is copied along)
+- shapefiles as GeoPackage with a spatial index, same field names; the PRA numbers stored as text in the shapefile are real numbers, so PRAs need no geodatabase conversion
+
+Load ALARM Data uses a copy only while the original is unchanged (size and modification time of the `.tif`, or of `.shp` and `.dbf`, are recorded in `_sources.json`). After a re-merge or an attribute patch it loads the original again until the copy is rebuilt, and says so in the messages. Filter and Report work on the loaded layers as before; Compare Scenarios keeps reading the original `.dbf` files. ArcGIS Pro cannot export GeoPackage layers (64-bit object IDs) to shapefiles with its own tools, so Export Filtered Data copies such layers row by row; filter and selection apply as usual.
+
+`optimized_base` in `alarm_tools_config.json` or the environment variable `ALARM_OPTIMIZED_BASE` points to another folder; an empty value switches the copies off.
+
 ## Project layout
 
 ```
@@ -271,8 +283,9 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 102 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 111 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
+- If optimized copies of that scenario exist, the integration tests load from them. Run them a second time with `ALARM_OPTIMIZED_BASE` set to an empty value to cover loading from the originals.
 - On GitHub, `.github/workflows/tests.yml` runs the tests without arcpy on every push (Windows and Linux, Python 3.9 and 3.11).
 - A filter change must be made in `alarm_core/filters.py` once; the SQL builders and the Python predicates live side by side there, and `test_filters.py` fails if they disagree.
 

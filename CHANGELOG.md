@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Load ALARM Data: loads from the optimized copies written by `tools/optimize_results.py` (pipeline repository) when they are up to date: Cloud-Optimized GeoTIFFs and GeoPackages with a spatial index in `L:\ALARM\Results_optimized\`. Much less data is read over `L:` when panning and zooming, and PRAs need no geodatabase conversion. Without a current copy the original is loaded as before. New setting `optimized_base` / `ALARM_OPTIMIZED_BASE` (empty switches it off)
+- Export Filtered Data: layers with 64-bit object IDs (GeoPackage) are exported to the shapefile row by row, since `ExportFeatures` refuses them (ERROR 002809)
 - Filter Layers / Compare Scenarios: tracks of several PRAs released together (proximity scenarios C/E of the pipeline with aspect-window clusters) pass when any member PRA matches, using the new track fields `n_pras`, `asp_set`, `elev_lo`, `elev_hi`. Single-PRA tracks and older results without these fields are filtered as before
 
 ## [2.0.0] - 2026-10-19

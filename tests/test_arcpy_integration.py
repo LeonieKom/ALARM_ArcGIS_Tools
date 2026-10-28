@@ -7,6 +7,10 @@ They need
     (it is copied to a temporary folder; the original is not touched).
 Optional: ALARM_TEST_REGION (default 02_Vest_Finnmark), ALARM_TEST_SCENARIO (default D).
 Without these the tests are skipped. The first load of a large region takes about a minute.
+
+If optimized copies of that scenario exist (tools/optimize_results.py in the pipeline
+repository), the layers are loaded from them. Run the tests a second time with
+ALARM_OPTIMIZED_BASE set to an empty value to cover loading from the originals too.
 """
 
 import importlib.machinery
@@ -28,6 +32,12 @@ APRX = os.environ.get("ALARM_TEST_APRX")
 
 _cfg = config.load_config()
 _sdir = data.find_scenario_dir(_cfg['results_base'], REGION, SCEN)
+# Are the PRAs loaded from an optimized copy (no geodatabase conversion then)?
+_pra_copy = (data.optimized_copy(_cfg['results_base'], _cfg['optimized_base'], data.find_file(_sdir, "pra_*.shp"))
+             if _sdir else None)
+needs_gdb_path = pytest.mark.skipif(_pra_copy is not None, reason="PRAs come from the optimized copy "
+                                    "(run with ALARM_OPTIMIZED_BASE= for the geodatabase path)")
+needs_copies = pytest.mark.skipif(_pra_copy is None, reason="no optimized copies of this scenario")
 
 pytestmark = [
     pytest.mark.skipif(not APRX or not Path(APRX).exists(), reason="set ALARM_TEST_APRX to a .aprx file"),
@@ -151,6 +161,7 @@ def test_load_puts_the_layers_into_one_group(loaded):
     assert all(l.longName.startswith(group[0].name + "\\") for l in feature_layers(loaded).values())
 
 
+@needs_gdb_path
 def test_pra_copy_has_numeric_fields_and_a_name_without_dots(loaded):
     arcpy.env.workspace = loaded.gdb
     fcs = arcpy.ListFeatureClasses("pra_*")
@@ -160,6 +171,7 @@ def test_pra_copy_has_numeric_fields_and_a_name_without_dots(loaded):
         assert types[name] == "Double", name
 
 
+@needs_gdb_path
 def test_second_load_uses_the_cache(loaded):
     import time
     arcpy.env.workspace = loaded.gdb
@@ -198,6 +210,29 @@ def test_several_regions_and_scenarios_load_in_one_run(env, capfd):
     assert "Loading 6 region/scenario combination(s): 2 region(s) x 3 scenario(s)" in out
     assert "Successfully loaded 4 layers from 4 of 6 combination(s)" in out
     assert "No data for: 03_Nord_Troms / Z, 04_Lyngen / Z" in out
+
+
+@needs_copies
+def test_layers_come_from_the_optimized_copies(loaded):
+    fast = data.comparable_source(_cfg['optimized_base'])
+    layers = feature_layers(loaded)
+    for name in (loaded.tracks, loaded.pras, loaded.risk):
+        assert data.comparable_source(layers[name].dataSource).startswith(fast), name
+    assert loaded.tracks == data.find_file(_sdir, "tracks_*.shp").stem        # same names as from the shapefiles
+    assert loaded.risk == data.find_file(_sdir / "risk_assessment", "risk_*.shp").stem
+    types = {fld.name: fld.type for fld in arcpy.ListFields(layers[loaded.pras])}
+    for name in ("elev_med", "aspect_deg", "area_m2", "T_HIGH", "T_LOW"):
+        assert types[name] == "Double", name
+    arcpy.env.workspace = loaded.gdb
+    assert not arcpy.ListFeatureClasses("pra_*")                              # no geodatabase conversion
+
+
+@needs_copies
+def test_ppr_from_the_optimized_copy_uses_the_pipeline_lyrx(loaded):
+    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["PPR Raster"]), P(False)], None)
+    ppr = next(l for l in loaded.map.listLayers() if l.isRasterLayer and l.name.startswith("ppr_"))
+    assert os.path.normcase(ppr.dataSource).startswith(os.path.normcase(str(_cfg['optimized_base'])))
+    assert len(ppr.symbology.colorizer.classBreaks) > 1
 
 
 def test_no_spatial_index_files_are_written_into_the_results_folder(loaded):

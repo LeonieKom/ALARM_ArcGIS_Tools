@@ -1,5 +1,8 @@
 """Finding ALARM result files on disk (no arcpy)."""
 
+import json
+import os
+import re
 from pathlib import Path
 
 # Copies the pipeline tools leave next to the results (reprocess_cell.py writes
@@ -58,3 +61,60 @@ def find_file(directory, pattern, warn=None):
         warn(f"  Several files match {pattern} in {Path(directory).name}: using {files[0].name} "
              f"(also: {', '.join(p.name for p in files[1:])})")
     return files[0] if files else None
+
+
+# Written by tools/optimize_results.py (pipeline repository) into every scenario folder
+# of the optimized tree: result file -> its copy, plus size and modification time of the
+# source file(s) at the time of copying.
+OPTIMIZED_MANIFEST = "_sources.json"
+
+
+def optimized_copy(results_base, optimized_base, source):
+    """Path of the optimized copy of a result file, or None to use the file itself.
+
+    The copies live in <optimized_base>/<region>/<scenario>/ (rasters as Cloud-Optimized
+    GeoTIFF, shapefiles as GeoPackage). A copy is only returned while every source file
+    it was made from (for a shapefile .shp and .dbf) still has the recorded size and
+    modification time, so a re-merged or patched result is never shown from an old copy.
+    For a GeoPackage the path names its table ('<file>.gpkg/main.<table>'), as arcpy
+    expects it.
+    """
+    if optimized_base is None:
+        return None
+    try:
+        parts = Path(source).relative_to(results_base).parts
+    except ValueError:
+        return None
+    if len(parts) < 4 or parts[1] != "merged":
+        return None
+    region, scenario = parts[0], parts[2]
+    out_dir = Path(optimized_base) / region / scenario
+    try:
+        manifest = json.loads((out_dir / OPTIMIZED_MANIFEST).read_text(encoding="utf-8"))
+        entry = manifest["files"]["/".join(parts[3:])]
+        for name, (size, mtime) in entry["sources"].items():
+            stat = (Path(source).parent / name).stat()
+            if stat.st_size != size or int(stat.st_mtime) != mtime:
+                return None
+        copy = out_dir / entry["output"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not copy.is_file():
+        return None
+    if entry.get("layer"):
+        return Path(os.path.join(str(copy), f"main.{entry['layer']}"))
+    return copy
+
+
+# ArcGIS Pro reports a GeoPackage layer's dataSource as
+# 'Instance=C:\x\file.gpkg,Dataset=main.%table', not as the path it was added from.
+_GPKG_SOURCE = re.compile(r"^Instance=(?P<file>.+),Dataset=(?P<table>[^,]+)$", re.IGNORECASE)
+
+
+def comparable_source(data_source):
+    """Normalized form of a file path or layer dataSource, so the two can be compared."""
+    text = str(data_source)
+    match = _GPKG_SOURCE.match(text)
+    if match:
+        text = os.path.join(match.group("file"), match.group("table").replace("%", ""))
+    return os.path.normcase(os.path.normpath(text))

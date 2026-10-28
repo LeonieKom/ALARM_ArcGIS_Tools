@@ -53,6 +53,27 @@ def test_example_config_matches_defaults():
     example = json.loads((Path(__file__).resolve().parent.parent / "alarm_tools_config.example.json").read_text())
     assert example['scenarios'] == config.DEFAULT_SCENARIOS
     assert example['results_base'] == config.DEFAULT_RESULTS_BASE
+    assert example['optimized_base'] == config.DEFAULT_RESULTS_BASE + "_optimized"
+
+
+def test_optimized_base_follows_results_base(tmp_path):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"results_base": "D:/x/Results"}))
+    assert config.load_config(path=f, environ={})['optimized_base'] == Path("D:/x/Results_optimized")
+    assert config.load_config(path=tmp_path / "none.json", environ={})['optimized_base'] == \
+        Path(config.DEFAULT_RESULTS_BASE + "_optimized")
+
+
+@pytest.mark.parametrize("json_value, env, expected", [
+    ("D:/fast", {}, Path("D:/fast")),
+    ("", {}, None),                                                   # switched off
+    ("D:/fast", {"ALARM_OPTIMIZED_BASE": "E:/env"}, Path("E:/env")),
+    ("D:/fast", {"ALARM_OPTIMIZED_BASE": ""}, None),
+])
+def test_optimized_base_overrides(tmp_path, json_value, env, expected):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"optimized_base": json_value}))
+    assert config.load_config(path=f, environ=env)['optimized_base'] == expected
 
 
 # --------------------------------------------------------------------------- data --
@@ -128,3 +149,70 @@ def test_other_result_types_with_the_same_prefix_are_skipped(tmp_path):
     (tmp_path / "pra_R_D.shp").unlink()
     (tmp_path / "pra_zz.shp").touch()
     assert data.find_file(tmp_path, "pra_*.shp").name == "pra_zz.shp"
+
+
+# ----------------------------------------------------------------- optimized copies --
+
+def make_optimized(tmp_path):
+    """A result folder with a raster and a shapefile, and their optimized copies."""
+    results, fast = tmp_path / "Results", tmp_path / "Results_optimized"
+    scen = results / "01_R" / "merged" / "D_75-55_prox0_rel2.3m"
+    (scen / "risk_assessment").mkdir(parents=True)
+    out = fast / "01_R" / scen.name
+    (out / "risk_assessment").mkdir(parents=True)
+    for name in ("ppr_R_D_max.tif", "risk_assessment/risk_R_D.shp", "risk_assessment/risk_R_D.dbf"):
+        (scen / name).write_bytes(b"x" * 10)
+    (out / "ppr_R_D_max.tif").write_bytes(b"cog")
+    (out / "risk_assessment" / "risk_R_D.gpkg").write_bytes(b"gpkg")
+
+    def stamp(name):
+        st = (scen / name).stat()
+        return [st.st_size, int(st.st_mtime)]
+
+    manifest = {"format": 1, "files": {
+        "ppr_R_D_max.tif": {"output": "ppr_R_D_max.tif", "sources": {"ppr_R_D_max.tif": stamp("ppr_R_D_max.tif")}},
+        "risk_assessment/risk_R_D.shp": {
+            "output": "risk_assessment/risk_R_D.gpkg", "layer": "risk_R_D",
+            "sources": {"risk_R_D.shp": stamp("risk_assessment/risk_R_D.shp"),
+                        "risk_R_D.dbf": stamp("risk_assessment/risk_R_D.dbf")}},
+    }}
+    (out / data.OPTIMIZED_MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    return results, fast, scen, out
+
+
+def test_optimized_copy_of_raster_and_shapefile(tmp_path):
+    results, fast, scen, out = make_optimized(tmp_path)
+    assert data.optimized_copy(results, fast, scen / "ppr_R_D_max.tif") == out / "ppr_R_D_max.tif"
+    assert data.optimized_copy(results, fast, scen / "risk_assessment" / "risk_R_D.shp") == \
+        out / "risk_assessment" / "risk_R_D.gpkg" / "main.risk_R_D"     # the table, as arcpy wants it
+
+
+def test_changed_source_means_no_copy(tmp_path):
+    results, fast, scen, _ = make_optimized(tmp_path)
+    (scen / "risk_assessment" / "risk_R_D.dbf").write_bytes(b"patched attributes")   # .shp unchanged
+    assert data.optimized_copy(results, fast, scen / "risk_assessment" / "risk_R_D.shp") is None
+    assert data.optimized_copy(results, fast, scen / "ppr_R_D_max.tif") is not None
+
+
+def test_no_copy_without_manifest_entry_or_copy_file(tmp_path):
+    results, fast, scen, out = make_optimized(tmp_path)
+    (scen / "pft_R_D_max.tif").write_bytes(b"x")
+    assert data.optimized_copy(results, fast, scen / "pft_R_D_max.tif") is None      # not in the manifest
+    (out / "ppr_R_D_max.tif").unlink()
+    assert data.optimized_copy(results, fast, scen / "ppr_R_D_max.tif") is None      # copy deleted
+    assert data.optimized_copy(results, None, scen / "ppr_R_D_max.tif") is None      # switched off
+
+
+def test_broken_manifest_or_foreign_path_means_no_copy(tmp_path):
+    results, fast, scen, out = make_optimized(tmp_path)
+    assert data.optimized_copy(results, fast, tmp_path / "elsewhere" / "ppr.tif") is None
+    (out / data.OPTIMIZED_MANIFEST).write_text("{ half written", encoding="utf-8")
+    assert data.optimized_copy(results, fast, scen / "ppr_R_D_max.tif") is None
+
+
+def test_gpkg_data_source_matches_the_path_it_was_added_from():
+    added = r"L:\fast\R\D\risk_assessment\risk_R_D.gpkg\main.risk_R_D"
+    reported = r"Instance=L:\fast\R\D\risk_assessment\risk_R_D.gpkg,Dataset=main.%risk_R_D"
+    assert data.comparable_source(reported) == data.comparable_source(added)
+    assert data.comparable_source(r"l:/fast/R/D/ppr.tif") == data.comparable_source(r"L:\fast\R\D\ppr.tif")
+    assert data.comparable_source(reported) != data.comparable_source(added.replace("risk_R_D", "risk_R_E"))

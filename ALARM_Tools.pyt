@@ -123,6 +123,7 @@ class LoadALARMData(object):
         # Configuration (see alarm_core/config.py; can be overridden in alarm_tools_config.json)
         cfg = _config.load_config()
         self.results_base = cfg['results_base']
+        self.optimized_base = cfg['optimized_base']
         self.scenarios = cfg['scenarios']
 
     def getParameterInfo(self):
@@ -244,11 +245,12 @@ class LoadALARMData(object):
         # Load PPR Raster
         if "PPR Raster" in data_types:
             ppr_file = self._find_file(scenario_dir, "ppr_*.tif")
-            if ppr_file and self._already_loaded(map_obj, ppr_file):
+            ppr_copy = self._optimized(ppr_file)
+            if ppr_file and self._already_loaded(map_obj, ppr_file, ppr_copy):
                 pass
             elif ppr_file:
                 arcpy.AddMessage(f"Loading PPR raster: {ppr_file.name}")
-                layer = map_obj.addDataFromPath(str(ppr_file))
+                layer = self._add(map_obj, ppr_file, ppr_copy)
                 # The pipeline's .lyrx is the single source of truth for PPR colors;
                 # the built-in symbology is only the fallback if it is missing.
                 ppr_lyrx = ppr_file.with_suffix(".lyrx")
@@ -266,11 +268,12 @@ class LoadALARMData(object):
         for label, prefix in (("PFV Raster", "pfv"), ("PFT Raster", "pft")):
             if label in data_types:
                 raster_file = self._find_file(scenario_dir, f"{prefix}_*.tif")
-                if raster_file and self._already_loaded(map_obj, raster_file):
+                raster_copy = self._optimized(raster_file)
+                if raster_file and self._already_loaded(map_obj, raster_file, raster_copy):
                     pass
                 elif raster_file:
                     arcpy.AddMessage(f"Loading {label}: {raster_file.name}")
-                    layer = map_obj.addDataFromPath(str(raster_file))
+                    layer = self._add(map_obj, raster_file, raster_copy)
                     self._apply_lyrx(layer, raster_file.with_suffix(".lyrx"))
                     layers_added.append(layer)
                 else:
@@ -279,11 +282,12 @@ class LoadALARMData(object):
         # Load Tracks
         if "Tracks" in data_types:
             tracks_file = self._find_file(scenario_dir, "tracks_*.shp")
-            if tracks_file and self._already_loaded(map_obj, tracks_file):
+            tracks_copy = self._optimized(tracks_file)
+            if tracks_file and self._already_loaded(map_obj, tracks_file, tracks_copy):
                 pass
             elif tracks_file:
                 arcpy.AddMessage(f"Loading tracks: {tracks_file.name}")
-                layer = map_obj.addDataFromPath(str(tracks_file))
+                layer = self._add(map_obj, tracks_file, tracks_copy)
                 self._apply_tracks_symbology(layer)
                 layers_added.append(layer)
             else:
@@ -294,26 +298,34 @@ class LoadALARMData(object):
             pra_file = self._find_file(scenario_dir, "pra_*.shp")
             if pra_file:
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
-                gdb_path = aprx.defaultGeodatabase
-
-                # The converted copy is cached in the project geodatabase. The name carries
-                # the modification time and size of the shapefile, so the cache is reused
-                # as long as the source is unchanged and rebuilt automatically when it changes.
-                # (GDB names must not contain - or .)
                 base_name = re.sub(r"[^0-9A-Za-z_]", "_", f"pra_{region}_{scenario_id}")
-                stat = pra_file.stat()
-                fc_name = f"{base_name}_{int(stat.st_mtime)}_{stat.st_size}"
-                fc_path = os.path.join(gdb_path, fc_name)
+                pra_copy = self._optimized(pra_file)
 
-                if arcpy.Exists(fc_path):
-                    arcpy.AddMessage("  Using cached geodatabase copy (source unchanged)")
+                if pra_copy is not None:
+                    # The optimized GeoPackage already has numeric fields; no conversion needed.
+                    fc_path = str(pra_copy)
+                    arcpy.AddMessage(f"  From the optimized copy (numeric fields): {fc_path}")
                 else:
-                    self._delete_old_pra_caches(gdb_path, base_name)
-                    arcpy.AddMessage("  Converting to File Geodatabase (numeric fields; takes a while, done once)...")
-                    self._convert_pra(map_obj, pra_file, fc_path)
-                    arcpy.AddMessage(f"  Converted to: {fc_path}")
+                    self._note_missing_copy()
+                    gdb_path = aprx.defaultGeodatabase
 
-                # Load from geodatabase instead of shapefile
+                    # The converted copy is cached in the project geodatabase. The name carries
+                    # the modification time and size of the shapefile, so the cache is reused
+                    # as long as the source is unchanged and rebuilt automatically when it changes.
+                    # (GDB names must not contain - or .)
+                    stat = pra_file.stat()
+                    fc_name = f"{base_name}_{int(stat.st_mtime)}_{stat.st_size}"
+                    fc_path = os.path.join(gdb_path, fc_name)
+
+                    if arcpy.Exists(fc_path):
+                        arcpy.AddMessage("  Using cached geodatabase copy (source unchanged)")
+                    else:
+                        self._delete_old_pra_caches(gdb_path, base_name)
+                        arcpy.AddMessage("  Converting to File Geodatabase (numeric fields; takes a while, done once)...")
+                        self._convert_pra(map_obj, pra_file, fc_path)
+                        arcpy.AddMessage(f"  Converted to: {fc_path}")
+
+                # Load the numeric copy instead of the shapefile
                 if not self._already_loaded(map_obj, fc_path):
                     layer = map_obj.addDataFromPath(fc_path)
                     layer.name = base_name
@@ -327,11 +339,12 @@ class LoadALARMData(object):
             risk_dir = scenario_dir / "risk_assessment"
             if risk_dir.exists():
                 risk_file = self._find_file(risk_dir, "risk_*.shp")
-                if risk_file and self._already_loaded(map_obj, risk_file):
+                risk_copy = self._optimized(risk_file)
+                if risk_file and self._already_loaded(map_obj, risk_file, risk_copy):
                     pass
                 elif risk_file:
                     arcpy.AddMessage(f"Loading risk assessment: {risk_file.name}")
-                    layer = map_obj.addDataFromPath(str(risk_file))
+                    layer = self._add(map_obj, risk_file, risk_copy)
                     self._apply_risk_symbology(layer)
                     layers_added.append(layer)
                 else:
@@ -374,17 +387,40 @@ class LoadALARMData(object):
 
         return len(layers_added)
 
-    def _already_loaded(self, map_obj, path):
-        """True (with a message) if a layer of the active map already shows this file.
+    def _optimized(self, path):
+        """Up-to-date optimized copy of a result file (see alarm_core.data.optimized_copy), or None."""
+        if path is None:
+            return None
+        return _data.optimized_copy(self.results_base, self.optimized_base, path)
 
-        Loading the same scenario twice used to add every layer a second time.
+    def _note_missing_copy(self):
+        """Say why a file is read from the (slower) original although optimized copies exist."""
+        if self.optimized_base is not None and self.optimized_base.is_dir():
+            arcpy.AddMessage("  No up-to-date optimized copy (tools/optimize_results.py) - loading the original")
+
+    def _add(self, map_obj, path, copy):
+        """Add a result file to the map, from its optimized copy when there is one."""
+        if copy is None:
+            self._note_missing_copy()
+            return map_obj.addDataFromPath(str(path))
+        arcpy.AddMessage(f"  From the optimized copy: {copy}")
+        layer = map_obj.addDataFromPath(str(copy))
+        if path.suffix.lower() == ".shp":
+            layer.name = path.stem  # GeoPackage layers would be called 'main.<table>'
+        return layer
+
+    def _already_loaded(self, map_obj, *paths):
+        """True (with a message) if a layer of the active map already shows one of these files.
+
+        Loading the same scenario twice used to add every layer a second time. A result is
+        given as original and optimized copy, so a layer from either one counts.
         """
-        target = os.path.normcase(os.path.normpath(str(path)))
+        targets = {_data.comparable_source(p) for p in paths if p is not None}
         for lyr in map_obj.listLayers():
             try:
                 if lyr.isGroupLayer or not lyr.supports("DATASOURCE"):
                     continue
-                if os.path.normcase(os.path.normpath(lyr.dataSource)) == target:
+                if _data.comparable_source(lyr.dataSource) in targets:
                     arcpy.AddMessage(f"  Already in the map as '{lyr.longName}' - skipped "
                                      f"(remove that layer to load it again)")
                     return True
@@ -1022,7 +1058,10 @@ class ExportFilteredData(object):
 
         try:
             # Export the layer (respects definitionQuery automatically)
-            arcpy.conversion.ExportFeatures(layer, output_path)
+            if self._has_64bit_ids(layer):
+                self._copy_rows(layer, output_path)
+            else:
+                arcpy.conversion.ExportFeatures(layer, output_path)
 
             # Count features
             result = arcpy.management.GetCount(output_path)
@@ -1035,6 +1074,43 @@ class ExportFilteredData(object):
             arcpy.AddError(f"Export failed: {e}")
 
         return
+
+    # Field types that can be written to a shapefile (BigInteger as DOUBLE, as shapefiles store
+    # wide integers); OID, geometry and the like are left out.
+    _SHAPEFILE_FIELD_TYPES = {"String": "TEXT", "Double": "DOUBLE", "Single": "FLOAT", "Integer": "LONG",
+                              "SmallInteger": "SHORT", "BigInteger": "DOUBLE", "Date": "DATE",
+                              "DateOnly": "DATE"}
+
+    def _has_64bit_ids(self, layer):
+        """True for layers with 64-bit object IDs (GeoPackage, e.g. the optimized copies)."""
+        try:
+            return any(f.type == "OID" and f.length == 8 for f in arcpy.ListFields(layer))
+        except Exception:
+            return False
+
+    def _copy_rows(self, layer, output_path):
+        """Write the features the layer shows into a new shapefile, row by row.
+
+        ArcGIS Pro cannot export a layer with 64-bit object IDs to a shapefile (ERROR 002809,
+        whichever tool is used). The cursors respect the filter and the selection like
+        ExportFeatures does.
+        """
+        desc = arcpy.Describe(layer)
+        fields = [f for f in arcpy.ListFields(layer) if f.type in self._SHAPEFILE_FIELD_TYPES]
+        out_dir, out_name = os.path.split(output_path)
+        arcpy.management.CreateFeatureclass(out_dir, out_name, desc.shapeType,
+                                            spatial_reference=desc.spatialReference)
+        for f in fields:
+            arcpy.management.AddField(output_path, f.name, self._SHAPEFILE_FIELD_TYPES[f.type],
+                                      field_length=f.length if f.type == "String" else None)
+        # CreateFeatureclass gives every new shapefile an 'Id' field
+        if fields and "id" not in {f.name.lower() for f in fields}:
+            arcpy.management.DeleteField(output_path, "Id")
+
+        names = ["SHAPE@"] + [f.name for f in fields]
+        with arcpy.da.SearchCursor(layer, names) as rows, arcpy.da.InsertCursor(output_path, names) as out:
+            for row in rows:
+                out.insertRow(row)
 
 
 class GenerateReport(object):
