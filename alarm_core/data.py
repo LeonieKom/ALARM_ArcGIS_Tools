@@ -1,6 +1,7 @@
 """Finding ALARM result files on disk (no arcpy)."""
 
 import json
+import ntpath
 import os
 import re
 from pathlib import Path
@@ -112,9 +113,13 @@ _GPKG_SOURCE = re.compile(r"^Instance=(?P<file>.+),Dataset=(?P<table>[^,]+)$", r
 
 
 def comparable_source(data_source):
-    """Normalized form of a file path or layer dataSource, so the two can be compared."""
+    """Normalized form of a file path or layer dataSource, so the two can be compared.
+
+    ArcGIS Pro only runs on Windows, so these are always Windows paths; ntpath keeps the
+    result the same when the tests run on Linux.
+    """
     text = str(data_source)
     match = _GPKG_SOURCE.match(text)
     if match:
-        text = os.path.join(match.group("file"), match.group("table").replace("%", ""))
-    return os.path.normcase(os.path.normpath(text))
+        text = ntpath.join(match.group("file"), match.group("table").replace("%", ""))
+    return ntpath.normcase(ntpath.normpath(text))
