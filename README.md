@@ -58,7 +58,7 @@ Loads data for forecast regions or for municipalities, with automatic symbology.
 **Municipality mode** - work with a municipality without caring about forecast regions:
 - The tool finds the forecast regions whose results reach into the selected municipalities, keeps from each of them only what lies (at least partly) inside, and merges the regions: per scenario you get one layer each, e.g. `tracks - Tromsø - D`, `pra - Tromsø - D`, `risk - Tromsø - D`, in the group `Tromsø - Scenario D`. A field `alarm_region` says which region a feature came from
 - A building that is in two regions (neighbouring regions overlap) is kept once, with its highest max PPR
-- Rasters are cut to the municipality (one layer per region, NoData outside)
+- Rasters are not cut: each region's raster is loaded whole (one layer per region, e.g. `ppr - 2_Tromso - D`); the boundary layer shows the municipality. Cutting read the full raster over the network and took about a minute per raster
 - The **boundaries** of the selected municipalities are drawn as their own layer (`Kommune: Tromsø`, dark red outline)
 - The cut-outs are stored in the project geodatabase and reused as long as the result files are unchanged, so loading the same municipality again is fast. The first time, the spatial selection on the large region layers takes a while (faster with optimized copies)
 

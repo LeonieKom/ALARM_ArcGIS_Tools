@@ -710,10 +710,16 @@ def test_real_municipality_load_across_two_regions(env, tmp_path, monkeypatch, c
     monkeypatch.setattr(env.mod, "_KOMMUNE_CACHE", tmp_path / "kommune_cache")
     capfd.readouterr()
     env.mod.LoadALARMData().execute(
-        load_params(None, [f"{data.FLAT_NO_ID} - x"], ["Tracks", "Risk Assessment"], True, source=alarm22_label(),
-                    kommuner=["Tromsø (5501)"]), None)
+        load_params(None, [f"{data.FLAT_NO_ID} - x"], ["PPR Raster", "Tracks", "Risk Assessment"], True,
+                    source=alarm22_label(), kommuner=["Tromsø (5501)"]), None)
     out = "".join(capfd.readouterr())
     assert "1_Lyngen" in out and "2_Tromso" in out
+    # whole region rasters, not cut (Lyngen's may already be there from the region-mode test)
+    sources = {Path(l.dataSource).name for l in env.map.listLayers() if l.isRasterLayer}
+    for region in ("1_Lyngen", "2_Tromso"):
+        assert f"ppr_{region}_80-60_prox0_rel1_2m_max.tif" in sources
+    assert "ppr - 2_Tromso - single - ALARM2_2" in {l.name for l in env.map.listLayers() if l.isRasterLayer}
+    assert "Cutting" not in out
     layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
     risk = layers["risk - Tromsø - single - ALARM2_2"]
     tracks = layers["tracks - Tromsø - single - ALARM2_2"]

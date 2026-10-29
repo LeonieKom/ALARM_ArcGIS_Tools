@@ -908,7 +908,7 @@ class LoadALARMData(object):
                 for region, folder in folders:
                     raster = self._find_file(folder, f"{prefix}_*.tif")
                     if raster:
-                        layer = self._load_cut_raster(map_obj, gdb, raster, boundary_fc, region, numbers, names, sid)
+                        layer = self._load_region_raster(map_obj, raster, region, sid)
                         if layer is not None:
                             layers_added.append(layer)
             if use_group:
@@ -1029,22 +1029,18 @@ class LoadALARMData(object):
                         cursor.deleteRow()
         return dropped
 
-    def _load_cut_raster(self, map_obj, gdb, raster, boundary_fc, region, numbers, names, sid):
-        """A result raster cut to the municipalities (one per region; NoData outside)."""
-        out = os.path.join(gdb, self._cut_name(raster.stem.split("_")[0], sid, [(region, raster)], numbers))
-        if not arcpy.Exists(out):
-            source = self._optimized(raster) or raster
-            arcpy.AddMessage(f"  Cutting {raster.name} to {names}")
-            try:
-                arcpy.management.Clip(str(source), "#", out, boundary_fc, "#", "ClippingGeometry",
-                                      "NO_MAINTAIN_EXTENT")
-            except Exception as e:
-                arcpy.AddWarning(f"  Could not cut {raster.name}: {e}")
-                return None
-        if self._already_loaded(map_obj, out):
+    def _load_region_raster(self, map_obj, raster, region, sid):
+        """A result raster of a whole region (one per region).
+
+        Not cut to the municipality: cutting read the full raster over the network and took
+        about a minute per raster; the boundary layer shows where the municipality is.
+        """
+        copy = self._optimized(raster)
+        if self._already_loaded(map_obj, raster, copy):
             return None
-        layer = map_obj.addDataFromPath(out)
-        layer.name = f"{raster.stem.split('_')[0]} - {names} - {sid} - {region}"
+        arcpy.AddMessage(f"  Loading {raster.name} (whole region {region})")
+        layer = self._add(map_obj, raster, copy)
+        layer.name = f"{raster.stem.split('_')[0]} - {region} - {sid}" + (f" - {self.source_tag}" if self.source_tag else "")
         lyrx = raster.with_suffix(".lyrx")
         if lyrx.exists():
             self._apply_lyrx(layer, lyrx)
