@@ -84,3 +84,37 @@ def test_report_without_map_has_no_leaflet(tmp_path):
     path = tmp_path / "r.html"
     report.write_html(path, report.collect([("S2", 30.0, 10.0, 200.0, "E")]), report.context_lines("lyr", "", 0))
     assert "leaflet" not in path.read_text(encoding="utf-8")
+
+
+def test_areas_are_numbered_by_priority_highest_pressure_first():
+    many_low = [{'lon': 18.95 + i * 0.001, 'lat': 69.65, 'geometry': None, 'props': {'max_ppr': 10.0}} for i in range(5)]
+    one_high = [{'lon': 19.5, 'lat': 69.7, 'geometry': None, 'props': {'max_ppr': 150.0}}]
+    no_value = [{'lon': 20.5, 'lat': 69.9, 'geometry': None, 'props': {'max_ppr': None}}]
+    p = webmap.build_payload(many_low + one_high + no_value)
+    assert [(a['n'], a['buildings'], a['max_ppr']) for a in p['areas']] == [(1, 1, 150.0), (2, 5, 10.0), (3, 1, None)]
+    points = [f for f in p['features'] if not f['properties'].get('outline')]
+    assert points[5]['properties']['area'] == 1 and points[0]['properties']['area'] == 2
+
+
+def square(x):
+    return {'type': 'Polygon', 'coordinates': [[[x, 69.0], [x + 0.01, 69.0], [x + 0.01, 69.01], [x, 69.0]]]}
+
+
+def test_background_layers_are_embedded_with_their_styles():
+    p = webmap.build_payload(buildings(), tracks=[{'geometry': square(18.9)}],
+                             pras=[{'geometry': square(18.91)}, {'geometry': None}],
+                             boundaries=[{'geometry': square(18.0), 'props': {'name': 'Tromsø'}}])
+    assert set(p['context']) == {'tracks', 'pras', 'boundaries'}
+    assert len(p['context']['pras']['features']) == 1                # empty geometry dropped
+    assert p['context']['boundaries']['features'][0]['properties'] == {'name': 'Tromsø'}
+    html = webmap.map_section(p)
+    assert "Avalanche tracks" in html and "PRAs" in html and "Municipality" in html   # legend
+    assert webmap.STYLE_TRACKS["fillColor"] in html and '"fill":false' in html
+    assert "L.rectangle" not in html                                 # no boxes around the areas
+
+
+def test_without_background_layers_the_context_is_empty():
+    p = webmap.build_payload(buildings())
+    assert p['context'] == {}
+    legend = re.search(r'<p class="alarm-legend">(.*?)</p>', webmap.map_section(p), re.S).group(1)
+    assert "Avalanche tracks" not in legend and "PRAs" not in legend
