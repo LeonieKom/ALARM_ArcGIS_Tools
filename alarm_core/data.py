@@ -33,6 +33,27 @@ def completed_regions(results_base):
     return sorted(regions)
 
 
+def shp_extent(shp_path):
+    """(xmin, ymin, xmax, ymax) from a shapefile header, or None if unreadable."""
+    import struct
+    try:
+        with open(shp_path, "rb") as fh:
+            header = fh.read(100)
+        if len(header) < 100 or struct.unpack(">i", header[:4])[0] != 9994:
+            return None
+        return struct.unpack("<4d", header[36:68])
+    except OSError:
+        return None
+
+
+def union_extent(extents):
+    """Bounding box of several (xmin, ymin, xmax, ymax), ignoring None; None if there is none."""
+    boxes = [e for e in extents if e]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
 def find_risk_file(risk_dir, warn=None):
     """The risk assessment shapefile in a scenario's risk_assessment folder, or None.
 

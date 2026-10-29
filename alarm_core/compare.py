@@ -9,7 +9,7 @@ from html import escape
 from pathlib import Path
 
 from .data import find_file, find_risk_file, scenario_dir_label
-from .dbf import read_dbf_columns, to_number
+from .dbf import RECORD, read_dbf_columns, to_number
 from .filters import TRACK_MEMBER_FIELDS, criteria_notes, matches_numeric, matches_risk, matches_track
 
 PPR_CLASSES = [("0-25 kPa", 0, 25), ("25-50 kPa", 25, 50), ("50-100 kPa", 50, 100),
@@ -22,11 +22,25 @@ NUMERIC_LAYERS = (
 )
 
 
-def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None):
+def _restrict(cols, total, inside, shp):
+    """Keep only the records inside the municipality selection (inside(shp) -> set of FIDs)."""
+    if inside is None:
+        return cols, total
+    keep = inside(shp)
+    if keep is None:
+        return cols, total
+    mask = [r in keep for r in cols[RECORD]]
+    return {k: [v for v, m in zip(values, mask) if m] for k, values in cols.items()}, sum(mask)
+
+
+def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None, inside=None):
     """Count features per layer type for one scenario, with and without the filter.
 
     Args:
         warn: optional callable receiving warning texts (e.g. arcpy.AddWarning)
+        inside: optional callable(shapefile path) -> set of record positions (FIDs) of the
+            features inside the selected municipalities, or None for all. With it, "total"
+            and "filtered" both refer to the municipalities only.
     """
     warn = warn or (lambda message: None)
     scenario_dir = Path(scenario_dir)
@@ -43,7 +57,9 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
         if key == 'tracks':
             try:
                 # cluster tracks: a track counts when any member PRA matches
-                cols, total = read_dbf_columns(dbf, [elev_field, aspect_field, *TRACK_MEMBER_FIELDS])
+                cols, total = read_dbf_columns(dbf, [elev_field, aspect_field, *TRACK_MEMBER_FIELDS],
+                                               record_index=True)
+                cols, total = _restrict(cols, total, inside, shp)
                 rows = zip(cols[elev_field], cols[aspect_field], *(cols[f] for f in TRACK_MEMBER_FIELDS))
                 matched = sum(1 for elev, asp, n, aspects, lo, hi in rows
                               if matches_track(to_number(elev), to_number(asp), to_number(n), aspects,
@@ -52,7 +68,8 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
                 continue
             except KeyError:
                 pass  # results from before cluster member fields: filter on the track's own PRA
-        cols, total = read_dbf_columns(dbf, [elev_field, aspect_field])
+        cols, total = read_dbf_columns(dbf, [elev_field, aspect_field], record_index=True)
+        cols, total = _restrict(cols, total, inside, shp)
         matched = sum(1 for elev, asp in zip(cols[elev_field], cols[aspect_field])
                       if matches_numeric(to_number(elev), to_number(asp), criteria))
         out[key] = {'total': total, 'matched': matched}
@@ -66,7 +83,8 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
         return out
 
     cols, total = read_dbf_columns(risk_shp.with_suffix(".dbf"),
-                                   ["saf_class", "max_ppr", "pra_elev", "pra_aspct"])
+                                   ["saf_class", "max_ppr", "pra_elev", "pra_aspct"], record_index=True)
+    cols, total = _restrict(cols, total, inside, risk_shp)
     saf_counts = {}
     ppr_counts = {label_: 0 for label_, _, _ in PPR_CLASSES}
     ppr_values = []

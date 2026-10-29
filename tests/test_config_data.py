@@ -52,6 +52,7 @@ def test_scenarios_do_not_leak_between_calls(tmp_path):
 def test_example_config_matches_defaults():
     example = json.loads((Path(__file__).resolve().parent.parent / "alarm_tools_config.example.json").read_text())
     assert example['scenarios'] == config.DEFAULT_SCENARIOS
+    assert example['kommune_gdb'] == config.DEFAULT_KOMMUNE_GDB
     assert {k: Path(v) for k, v in example['sources'].items()} == {
         k: Path(v) for k, v in config.DEFAULT_EXTRA_SOURCES.items()}
     assert example['results_base'] == config.DEFAULT_RESULTS_BASE
@@ -355,3 +356,23 @@ def test_the_clipped_variant_of_a_raster_is_not_chosen_and_not_reported(tmp_path
 def test_a_clipped_raster_alone_is_still_found(tmp_path):
     (tmp_path / "ppr_R_x_max_clipped.tif").touch()
     assert data.find_file(tmp_path, "ppr_*.tif").name == "ppr_R_x_max_clipped.tif"
+
+
+def test_kommune_gdb_setting(tmp_path):
+    assert config.load_config(path=tmp_path / "none.json", environ={})['kommune_gdb'] == Path(config.DEFAULT_KOMMUNE_GDB)
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"kommune_gdb": "D:/k.gdb"}))
+    assert config.load_config(path=f, environ={})['kommune_gdb'] == Path("D:/k.gdb")
+    assert config.load_config(path=f, environ={"ALARM_KOMMUNE_GDB": "E:/x.gdb"})['kommune_gdb'] == Path("E:/x.gdb")
+
+
+def test_shp_extent_from_the_header(tmp_path):
+    import struct
+    shp = tmp_path / "t.shp"
+    shp.write_bytes(struct.pack(">i", 9994) + bytes(32) + struct.pack("<4d", 1.0, 2.0, 3.0, 4.0) + bytes(32))
+    assert data.shp_extent(shp) == (1.0, 2.0, 3.0, 4.0)
+    (tmp_path / "bad.shp").write_bytes(b"nope")
+    assert data.shp_extent(tmp_path / "bad.shp") is None
+    assert data.shp_extent(tmp_path / "missing.shp") is None
+    assert data.union_extent([(0, 0, 1, 1), None, (2, -1, 3, 0.5)]) == (0, -1, 3, 1)
+    assert data.union_extent([None]) is None

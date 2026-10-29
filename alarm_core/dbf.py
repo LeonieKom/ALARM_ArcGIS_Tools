@@ -8,12 +8,17 @@ import os
 import struct
 
 
-def read_dbf_columns(dbf_path, wanted):
+RECORD = "@record"
+
+
+def read_dbf_columns(dbf_path, wanted, record_index=False):
     """Read selected columns of a .dbf file.
 
     Args:
         dbf_path: path of the .dbf file
         wanted: field names (case-insensitive)
+        record_index: also return the position of every record under the key RECORD. In a
+            shapefile this position is the object ID (FID) arcpy uses.
     Returns:
         (dict field name -> list of values, number of records). Numeric (N/F) fields become
         float or None, other fields stripped strings. Deleted records are skipped.
@@ -43,6 +48,8 @@ def read_dbf_columns(dbf_path, wanted):
         selected.append(by_lower[name.lower()])
 
     result = {name: [] for name in wanted}
+    if record_index:
+        result[RECORD] = []
     count = 0
     for i in range(n_records):
         start = header_len + i * record_len
@@ -50,6 +57,8 @@ def read_dbf_columns(dbf_path, wanted):
         if not record or record[0:1] == b"*":
             continue
         count += 1
+        if record_index:
+            result[RECORD].append(i)
         for name, (_, ftype, off, length) in zip(wanted, selected):
             raw = record[off:off + length].decode("utf-8", "replace").strip()
             if ftype in ("N", "F"):

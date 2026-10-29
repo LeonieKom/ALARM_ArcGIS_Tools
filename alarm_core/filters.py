@@ -23,9 +23,15 @@ ASPECT_DEGREES = "Degree Range"
 
 
 def make_criteria(elev_min=None, elev_max=None, aspect_type=ASPECT_NONE, cardinal=None,
-                  aspect_min=None, aspect_max=None, saf_classes=None, min_max_ppr=None):
-    """Normalised filter criteria (one dict shared by SQL builders and Python predicates)."""
+                  aspect_min=None, aspect_max=None, saf_classes=None, min_max_ppr=None, kommuner=None):
+    """Normalised filter criteria (one dict shared by SQL builders and Python predicates).
+
+    kommuner (municipality labels, see alarm_core.kommune) is a spatial criterion: the tools
+    turn it into a set of object IDs with arcpy; the SQL builders and predicates here do not
+    handle it.
+    """
     return {
+        'kommuner': list(kommuner or []),
         'elev_min': elev_min,
         'elev_max': elev_max,
         'aspect_type': aspect_type or ASPECT_NONE,
@@ -69,7 +75,7 @@ def validate(criteria, require_any=False):
 
 def has_any(criteria):
     """True if at least one criterion would restrict the features."""
-    return any([criteria['elev_min'] is not None, criteria['elev_max'] is not None,
+    return any([bool(criteria.get('kommuner')), criteria['elev_min'] is not None, criteria['elev_max'] is not None,
                 criteria['aspect_type'] == ASPECT_CARDINAL and bool(criteria['cardinal']),
                 criteria['aspect_type'] == ASPECT_DEGREES and criteria['aspect_min'] is not None
                 and criteria['aspect_max'] is not None,
@@ -283,6 +289,9 @@ def matches_risk(saf, ppr, elev, aspect_text, criteria):
 def criteria_notes(criteria):
     """Human readable list of the active criteria (and which layers they apply to)."""
     notes = []
+    if criteria.get('kommuner'):
+        notes.append(f"Municipality: {', '.join(criteria['kommuner'])} "
+                     f"(tracks, PRAs, buildings that lie at least partly inside)")
     if criteria['elev_min'] is not None or criteria['elev_max'] is not None:
         lo = "-" if criteria['elev_min'] is None else f"{criteria['elev_min']:g}"
         hi = "-" if criteria['elev_max'] is None else f"{criteria['elev_max']:g}"
@@ -300,6 +309,30 @@ def criteria_notes(criteria):
     if not notes:
         notes.append("No filter - all features")
     return notes
+
+
+def describe(criteria):
+    """Short readable description of the criteria, used as the name of a layer's filter."""
+    from .kommune import short_names
+    parts = []
+    if criteria.get('kommuner'):
+        parts.append("Kommune " + ", ".join(short_names(criteria['kommuner'])))
+    lo, hi = criteria['elev_min'], criteria['elev_max']
+    if lo is not None and hi is not None:
+        parts.append(f"{lo:g}-{hi:g} m")
+    elif lo is not None:
+        parts.append(f">= {lo:g} m")
+    elif hi is not None:
+        parts.append(f"<= {hi:g} m")
+    if criteria['aspect_type'] == ASPECT_CARDINAL and criteria['cardinal']:
+        parts.append("/".join(criteria['cardinal']))
+    elif criteria['aspect_type'] == ASPECT_DEGREES and criteria['aspect_min'] is not None             and criteria['aspect_max'] is not None:
+        parts.append(f"{criteria['aspect_min']:g}-{criteria['aspect_max']:g} deg")
+    if criteria['saf_classes']:
+        parts.append(",".join(criteria['saf_classes']))
+    if criteria['min_max_ppr'] is not None:
+        parts.append(f"PPR >= {criteria['min_max_ppr']:g} kPa")
+    return "; ".join(parts) if parts else "no criteria"
 
 
 def combine_refine(previous_query, new_query):

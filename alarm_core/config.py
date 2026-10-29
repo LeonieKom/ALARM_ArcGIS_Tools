@@ -39,6 +39,9 @@ DEFAULT_EXTRA_SOURCES = {
     'ALARM2.2': r"L:\ALARM\ALARM2.2",
 }
 
+# Municipality boundaries (Kartverket "Kommuner", feature class 'kommune' + names table)
+DEFAULT_KOMMUNE_GDB = r"L:\ALARM\BaseData\Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb"
+
 CONFIG_FILENAME = "alarm_tools_config.json"
 
 
@@ -49,7 +52,7 @@ def config_path():
 
 def load_config(path=None, environ=None):
     """Return {'results_base': Path, 'optimized_base': Path or None, 'scenarios': dict,
-    'sources': {name: Path}}  (the first source is the standard results folder).
+    'sources': {name: Path}, 'kommune_gdb': Path}  (the first source is the standard results folder).
 
     Precedence: environment variable > JSON file > defaults. A broken JSON file raises
     ValueError with the file name, so the problem is visible instead of silently ignored.
@@ -59,6 +62,7 @@ def load_config(path=None, environ=None):
     optimized_base = None  # None: derived from results_base below
     scenarios = dict(DEFAULT_SCENARIOS)
     extra_sources = dict(DEFAULT_EXTRA_SOURCES)
+    kommune_gdb = DEFAULT_KOMMUNE_GDB
 
     cfg_file = Path(path) if path else config_path()
     if cfg_file.exists():
@@ -72,6 +76,8 @@ def load_config(path=None, environ=None):
             optimized_base = data["optimized_base"] or ""
         if data.get("scenarios"):
             scenarios = {str(k): str(v) for k, v in data["scenarios"].items()}
+        if data.get("kommune_gdb"):
+            kommune_gdb = data["kommune_gdb"]
         for name, folder in (data.get("sources") or {}).items():
             if folder:
                 extra_sources[str(name)] = str(folder)
@@ -80,6 +86,8 @@ def load_config(path=None, environ=None):
 
     if environ.get("ALARM_RESULTS_BASE"):
         results_base = environ["ALARM_RESULTS_BASE"]
+    if environ.get("ALARM_KOMMUNE_GDB"):
+        kommune_gdb = environ["ALARM_KOMMUNE_GDB"]
     if "ALARM_OPTIMIZED_BASE" in environ:
         optimized_base = environ["ALARM_OPTIMIZED_BASE"]
 
@@ -91,4 +99,5 @@ def load_config(path=None, environ=None):
     return {'results_base': results_base,
             'optimized_base': Path(optimized_base) if optimized_base else None,
             'scenarios': scenarios,
-            'sources': sources}
+            'sources': sources,
+            'kommune_gdb': Path(kommune_gdb)}
