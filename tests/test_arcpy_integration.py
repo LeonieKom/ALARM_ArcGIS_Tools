@@ -361,7 +361,7 @@ def test_report_writes_html_and_csv_and_states_the_filter(loaded, tmp_path):
 def test_report_on_a_non_risk_layer_gives_a_clear_error(loaded, tmp_path, capfd):
     tracks_layer = feature_layers(loaded)[loaded.tracks]
     loaded.mod.GenerateReport().execute([P(tracks_layer), P(str(tmp_path)), P("HTML")], None)
-    assert "is it a Risk Assessment layer?" in "".join(capfd.readouterr())
+    assert "None of the chosen layers is a Risk Assessment layer" in "".join(capfd.readouterr())
     assert not list(tmp_path.glob("*.html"))
 
 

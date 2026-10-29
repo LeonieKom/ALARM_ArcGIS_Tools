@@ -128,7 +128,7 @@ Min Max PPR: 25 kPa
 Generate a detailed statistics report for one or several Risk Assessment layers.
 
 **Parameters:**
-- **Risk Assessment Layers**: one or several from the current map, e.g. the risk layers of all forecast regions a municipality lies in. They are combined; a building in more than one layer (same `bld_id`) is counted once, with its highest max PPR, and the report says how many there were
+- **Risk Assessment Layers**: one or several from the current map, e.g. the risk layers of all forecast regions a municipality lies in. Tracks and PRA layers chosen here as well are drawn on the map (layers of the same group are drawn anyway); other layers are not used. The dialog says before the run how each chosen layer is used. They are combined; a building in more than one layer (same `bld_id`) is counted once, with its highest max PPR, and the report says how many there were
 - **Output Directory**: Where to save the report
 - **Report Format**: HTML, CSV, or Both
 - **Include map**: an interactive map in the HTML report (default: yes)

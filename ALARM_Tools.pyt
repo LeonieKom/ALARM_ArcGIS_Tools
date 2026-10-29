@@ -430,6 +430,17 @@ def _short_sql(sql, limit=300):
     return sql if len(sql) <= limit else f"{sql[:limit]}... ({len(sql)} characters)"
 
 
+def _unique_layers(layers):
+    """The layers without repeats (the same map layer can be found twice)."""
+    seen, out = set(), []
+    for layer in layers:
+        key = (layer.longName, getattr(layer, "dataSource", None))
+        if key not in seen:
+            seen.add(key)
+            out.append(layer)
+    return out
+
+
 # Name prefix of the municipality boundary layers that Load ALARM Data adds
 KOMMUNE_LAYER_PREFIX = "Kommune: "
 
@@ -1834,9 +1845,10 @@ class GenerateReport(object):
     def getParameterInfo(self):
         """Define parameter definitions"""
 
-        # Parameter 0: Risk Assessment layers (several: combined, each building once)
+        # Parameter 0: Risk Assessment layers (several: combined, each building once). Tracks and
+        # PRA layers chosen here too are drawn on the map.
         param0 = arcpy.Parameter(
-            displayName="Risk Assessment Layers",
+            displayName="Risk Assessment Layers (tracks/PRAs chosen too are drawn on the map)",
             name="risk_layer",
             datatype="GPFeatureLayer",
             parameterType="Required",
@@ -1883,19 +1895,50 @@ class GenerateReport(object):
         return
 
     def updateMessages(self, parameters):
-        """Modify the messages created by internal validation for each tool parameter."""
+        """Say before the run which chosen layers are used how."""
+        if not parameters[0].valueAsText:
+            return
+        try:
+            kinds = self._sort_layers(_layers_of(parameters[0]), quiet=True)
+        except Exception:
+            return
+        if not kinds['risk']:
+            parameters[0].setErrorMessage("Choose at least one Risk Assessment layer.")
+        elif kinds['tracks'] or kinds['pras'] or kinds['other']:
+            notes = []
+            if kinds['tracks'] or kinds['pras']:
+                notes.append(f"{', '.join(l.name for l in kinds['tracks'] + kinds['pras'])}: drawn on the map")
+            if kinds['other']:
+                notes.append(f"{', '.join(l.name for l in kinds['other'])}: not used")
+            parameters[0].setWarningMessage("; ".join(notes))
         return
+
+    def _sort_layers(self, layers, quiet=False):
+        """{'risk', 'tracks', 'pras', 'other': [layers]} by their fields."""
+        detector = FilterLayers()
+        kinds = {'risk': [], 'tracks': [], 'pras': [], 'other': []}
+        for layer in layers:
+            kind = detector._detect_layer_type(layer)
+            kinds[kind if kind in kinds else 'other'].append(layer)
+        if not quiet:
+            for layer in kinds['tracks'] + kinds['pras']:
+                arcpy.AddMessage(f"{layer.name}: not a Risk Assessment layer - drawn on the map")
+            for layer in kinds['other']:
+                arcpy.AddWarning(f"{layer.name}: not a Risk Assessment, tracks or PRA layer - not used")
+        return kinds
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
-        layers = _layers_of(parameters[0])
+        kinds = self._sort_layers(_layers_of(parameters[0]))
+        layers = kinds['risk']
         output_dir = parameters[1].valueAsText
         report_format = parameters[2].valueAsText
         include_map = bool(parameters[3].value) if len(parameters) > 3 and parameters[3].value is not None else True
         if not layers:
-            arcpy.AddError("No Risk Assessment layer found in the active map.")
+            arcpy.AddError("None of the chosen layers is a Risk Assessment layer.")
             return
         with_map = include_map and report_format in ["HTML", "Both"]
+        self._extra_context = (kinds['tracks'], kinds['pras'])
 
         entries, records = [], []
         for layer in layers:
@@ -1993,6 +2036,10 @@ class GenerateReport(object):
                      for k in self.MAP_FIELDS + ['source'] if r.get(k) is not None}
             buildings.append({'lon': r['lon'], 'lat': r['lat'], 'geometry': r.get('geometry'), 'props': props})
         tracks_layers, pra_layers, boundary_layers = self._context_layers(layers)
+        # tracks / PRA layers chosen in the dialog are drawn as well (each layer once)
+        extra_tracks, extra_pras = getattr(self, "_extra_context", ([], []))
+        tracks_layers = _unique_layers(tracks_layers + list(extra_tracks))
+        pra_layers = _unique_layers(pra_layers + list(extra_pras))
         tracks = [g for lyr in tracks_layers for g in self._features_near(lyr, layers)]
         pras = [g for lyr in pra_layers for g in self._features_near(lyr, layers)]
         boundaries = [g for lyr in boundary_layers for g in self._all_features(lyr, 20)]

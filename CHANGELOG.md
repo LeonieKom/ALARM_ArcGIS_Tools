@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Generate Report: tracks and PRA layers chosen together with the risk layers are drawn on the map instead of stopping the tool; other layers are skipped with a note, and the dialog tells before the run
 - Load ALARM Data: **municipality mode**. Choose municipalities instead of forecast regions; the tool finds the regions whose results reach into them, cuts tracks, PRAs, buildings and rasters to the municipalities and merges the regions into one layer per type and scenario (field `alarm_region` names the source region). Buildings in two regions are kept once (highest max PPR). The municipality boundaries are added as their own layer. Cut-outs are cached in the project geodatabase while the result files are unchanged
 - Generate Report: several Risk Assessment layers combined in one report; buildings counted once (highest max PPR). The map shows tracks (light blue) and PRAs (black outline) of the same groups and municipality boundaries as background, without the boxes around the areas; the affected areas are ordered by priority (highest max PPR first)
 - Filter Layers: **filter by municipality** (Kommuner, tick list). A feature counts when it lies at least partly inside; combines with the other criteria and with refining. Export and Report follow it. The list comes with the toolbox (`alarm_core/kommuner.json`, Kartverket) and shows the municipalities the chosen layers touch; boundaries are read once from `kommune_gdb` and cached locally

@@ -578,6 +578,42 @@ def test_layers_can_also_be_given_by_name(env, two_regions, tmp_path):
     assert "Total Buildings Analyzed:</strong> 3<" in html
 
 
+# ----------------------------------- report with tracks / PRA layers chosen as well --
+
+def test_report_with_tracks_and_pras_chosen_too_draws_them(env, two_regions, tmp_path, capfd):
+    """As in ArcGIS Pro: risk, PRA and tracks layer of a group all chosen in 'Risk Assessment Layers'."""
+    chosen = [two_regions["risk_RA_A_x"], two_regions["pra_RA_A_x"], two_regions["tracks_RA_A_x"]]
+    capfd.readouterr()
+    env.mod.GenerateReport().execute([P(chosen), P(str(tmp_path)), P("HTML"), P(True)], None)
+    out = "".join(capfd.readouterr())
+    assert "pra_RA_A_x: not a Risk Assessment layer - drawn on the map" in out
+    html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+    assert "Total Buildings Analyzed:</strong> 2<" in html           # statistics from the risk layer only
+    data = _map_data(html)
+    assert len(data['context']['tracks']['features']) == 1           # drawn once, not once per way it was found
+    assert len(data['context']['pras']['features']) == 1
+
+
+def test_report_without_any_risk_layer_is_an_error(env, two_regions, tmp_path, capfd):
+    capfd.readouterr()
+    env.mod.GenerateReport().execute([P([two_regions["tracks_RA_A_x"]]), P(str(tmp_path)), P("HTML"), P(True)], None)
+    assert "None of the chosen layers is a Risk Assessment layer" in "".join(capfd.readouterr())
+    assert not list(tmp_path.glob("*.html"))
+
+
+def test_report_dialog_says_how_the_chosen_layers_are_used(env, two_regions):
+    tool = env.mod.GenerateReport()
+    params = [P([two_regions["risk_RA_A_x"], two_regions["tracks_RA_A_x"],
+                 two_regions["Kommune: Testkommune shapefile"]]), P("x"), P("HTML"), P(True)]
+    tool.updateMessages(params)
+    assert params[0].error is None
+    assert "tracks_RA_A_x: drawn on the map" in params[0].warning
+    assert "Kommune: Testkommune shapefile: not used" in params[0].warning
+    params = [P([two_regions["tracks_RA_A_x"]]), P("x"), P("HTML"), P(True)]
+    tool.updateMessages(params)
+    assert params[0].error == "Choose at least one Risk Assessment layer."
+
+
 # ------------------------------------------------------- loading by municipality --
 
 from arcpy_helpers import MODE_KOMMUNER, MODE_REGIONS   # noqa: E402
