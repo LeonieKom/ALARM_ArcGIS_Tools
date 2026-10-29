@@ -48,7 +48,7 @@ def _shapefile(folder, name, fields, rows):
             cursor.insertRow((_square(i * 2),) + tuple(row))
 
 
-def make_flat_run(base, region=REGION, scenario_id="A", params=PARAMS):
+def make_flat_run(base, region=REGION, scenario_id="A", params=PARAMS, risk_fields=None, risk_rows=None):
     """A single-scenario run: all files directly in <base>/<region>/merged/."""
     merged = Path(base) / region / "merged"
     (merged / "risk_assessment").mkdir(parents=True)
@@ -61,9 +61,9 @@ def make_flat_run(base, region=REGION, scenario_id="A", params=PARAMS):
                 ("T_HIGH", "TEXT", 20), ("T_LOW", "TEXT", 20)],
                [(str(e), str(a), "1000", "80", "60") for e, a in PRAS])
     _shapefile(merged / "risk_assessment", f"risk_assessment_{region}_{stem}.shp",     # the name a single run uses
-               [("saf_class", "TEXT", 4), ("max_ppr", "DOUBLE", None), ("mean_ppr", "DOUBLE", None),
-                ("pra_elev", "DOUBLE", None), ("pra_aspct", "TEXT", 4)],
-               [(s, p, p / 2, e, a) for s, p, e, a in RISK])
+               risk_fields or [("saf_class", "TEXT", 4), ("max_ppr", "DOUBLE", None), ("mean_ppr", "DOUBLE", None),
+                               ("pra_elev", "DOUBLE", None), ("pra_aspct", "TEXT", 4)],
+               risk_rows or [(s, p, p / 2, e, a) for s, p, e, a in RISK])
     return merged
 
 
@@ -89,7 +89,8 @@ def by_name(params):
 
 def test_load_dialog_has_the_source_parameters_first(env):
     params = env.mod.LoadALARMData().getParameterInfo()
-    assert [p.name for p in params] == ["source", "source_folder", "region", "scenario", "data_types", "use_group"]
+    assert [p.name for p in params] == ["source", "source_folder", "load_by", "region", "municipalities", "scenario",
+                                        "data_types", "use_group"]
     labels = params[0].filter.list
     assert labels[-1] == OTHER and len(labels) >= 2
     assert labels[0].startswith(config.STANDARD_SOURCE) and any(l.startswith("ALARM2.2") for l in labels)
@@ -535,7 +536,7 @@ def two_regions(env, tmp_path_factory):
         m.removeLayer(layer)
         added.append(name)
     boundary = m.addDataFromPath(str(folder / "kommune_9901.shp"))
-    boundary.name = "Kommune: Testkommune"
+    boundary.name = "Kommune: Testkommune shapefile"      # unique: arcpy resolves layers by name here
     layers = {l.name: l for l in m.listLayers() if l.isFeatureLayer}
     return layers
 
@@ -567,7 +568,7 @@ def test_report_map_has_tracks_pras_and_boundary_as_background(env, two_regions,
     data = _map_data(next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8"))
     assert len(data['context']['tracks']['features']) == 1           # the far one is left out
     assert len(data['context']['pras']['features']) == 1
-    assert data['context']['boundaries']['features'][0]['properties']['name'] == "Testkommune"
+    assert any(f['properties'].get('name') == "Testkommune" for f in data['context']['boundaries']['features'])
 
 
 def test_layers_can_also_be_given_by_name(env, two_regions, tmp_path):
@@ -575,3 +576,114 @@ def test_layers_can_also_be_given_by_name(env, two_regions, tmp_path):
     env.mod.GenerateReport().execute([P([risk_b.longName]), P(str(tmp_path)), P("HTML"), P(False)], None)
     html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
     assert "Total Buildings Analyzed:</strong> 3<" in html
+
+
+# ------------------------------------------------------- loading by municipality --
+
+from arcpy_helpers import MODE_KOMMUNER, MODE_REGIONS   # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def two_region_run(tmp_path_factory):
+    """<tmp>/run_k with regions R1 and R2 (single-scenario runs, scenario A) on the same squares.
+
+    Buildings 2 and 3 are in both regions (overlapping regions); building 2 is worse in R2.
+    """
+    base = tmp_path_factory.mktemp("kdata") / "run_k"
+    risk_fields = [("bld_id", "LONG", None), ("saf_class", "TEXT", 4), ("max_ppr", "DOUBLE", None),
+                   ("mean_ppr", "DOUBLE", None), ("pra_elev", "DOUBLE", None), ("pra_aspct", "TEXT", 4)]
+    for region, risk_rows in (
+            ("R1", [(1, "S2", 10.0, 5.0, 100.0, "N"), (2, "S3", 20.0, 9.0, 200.0, "E"), (3, "S1", 1.0, 1.0, 300.0, "S")]),
+            ("R2", [(2, "S3", 60.0, 9.0, 200.0, "E"), (3, "S1", 1.0, 1.0, 300.0, "S"), (4, "S2", 5.0, 2.0, 400.0, "W")])):
+        make_flat_run(base, region, "A", risk_fields=risk_fields, risk_rows=risk_rows)
+    return base
+
+
+def test_load_dialog_switches_between_regions_and_municipalities(env):
+    tool = env.mod.LoadALARMData()
+    params = load_params(None, None, ["Tracks"], kommuner=None)
+    p = {x.name: x for x in params}
+    tool.updateParameters(params)
+    assert p["region"].enabled is True and p["municipalities"].enabled is False
+    p["load_by"].value = MODE_KOMMUNER
+    p["load_by"].altered, p["load_by"].hasBeenValidated = True, False
+    tool.updateParameters(params)
+    assert p["region"].enabled is False and p["municipalities"].enabled is True
+    tool.updateMessages(params)
+    assert p["municipalities"].error == "Select at least one municipality."
+    assert p["region"].error is None                                 # not needed in this mode
+    p["load_by"].value = MODE_REGIONS
+    p["municipalities"].error = None
+    tool.updateMessages(params)
+    assert p["region"].error == "Select at least one region."
+
+
+def test_loading_by_municipality_cuts_and_merges_the_regions(kommune_env, two_region_run, capfd):
+    env = kommune_env
+    capfd.readouterr()
+    env.mod.LoadALARMData().execute(
+        load_params(None, ["A - x"], ["Tracks", "PRAs", "Risk Assessment"], True, source=OTHER,
+                    folder=str(two_region_run), kommuner=TEST_KOMMUNE), None)
+    out = "".join(capfd.readouterr())
+    assert "Forecast regions that may overlap them: R1, R2" in out
+    assert "risk: 1 buildings were in more than one region" in out   # building 2 (3 of R1 lies outside)
+    groups = [l.name for l in env.map.listLayers() if l.isGroupLayer]
+    assert "Testkommune - Scenario A [run_k]" in groups
+    layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
+    assert "Kommune: Testkommune" in layers                         # the boundary, above the groups
+    tracks = layers["tracks - Testkommune - A - run_k"]
+    pras = layers["pra - Testkommune - A - run_k"]
+    risk = layers["risk - Testkommune - A - run_k"]
+    assert int(arcpy.management.GetCount(tracks)[0]) == 4            # squares 0 and 1 of both regions
+    assert int(arcpy.management.GetCount(pras)[0]) == 4
+    assert {r[0] for r in arcpy.da.SearchCursor(tracks, ["alarm_region"])} == {"R1", "R2"}
+    buildings = sorted(arcpy.da.SearchCursor(risk, ["bld_id", "max_ppr", "alarm_region"]))
+    assert buildings == [(1, 10.0, "R1"), (2, 60.0, "R2"), (3, 1.0, "R2")]   # inside, each once, worst result
+    types = {f.name: f.type for f in arcpy.ListFields(pras.dataSource)}
+    assert types["elev_med"] == "Double" and types["aspect_deg"] == "Double"   # numbers, not text
+    assert "Successfully loaded 3 layers for Testkommune" in out
+
+
+def test_loading_the_same_municipality_again_uses_the_cut_out(kommune_env, two_region_run, capfd):
+    env = kommune_env
+    before = sorted(l.longName for l in env.map.listLayers())
+    capfd.readouterr()
+    env.mod.LoadALARMData().execute(
+        load_params(None, ["A - x"], ["Tracks", "PRAs", "Risk Assessment"], True, source=OTHER,
+                    folder=str(two_region_run), kommuner=TEST_KOMMUNE), None)
+    out = "".join(capfd.readouterr())
+    assert out.count("using the cut-out made earlier") == 3
+    assert sorted(l.longName for l in env.map.listLayers()) == before
+
+
+def test_report_on_a_municipality_load_has_its_background(kommune_env, two_region_run, tmp_path):
+    env = kommune_env
+    layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
+    risk = layers["risk - Testkommune - A - run_k"]
+    env.mod.GenerateReport().execute([P([risk]), P(str(tmp_path)), P("HTML"), P(True)], None)
+    data = _map_data(next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8"))
+    assert len(data['context']['tracks']['features']) == 4
+    assert len(data['context']['pras']['features']) == 4
+    assert any(f['properties'].get('name') == "Testkommune" for f in data['context']['boundaries']['features'])
+    assert data['areas'][0]['max_ppr'] == 60.0
+
+
+@needs_alarm22
+def test_real_municipality_load_across_two_regions(env, tmp_path, monkeypatch, capfd):
+    """Tromsø municipality from the ALARM2.2 runs: found in both regions, cut and merged."""
+    monkeypatch.setattr(env.mod, "_KOMMUNE_CACHE", tmp_path / "kommune_cache")
+    capfd.readouterr()
+    env.mod.LoadALARMData().execute(
+        load_params(None, [f"{data.FLAT_NO_ID} - x"], ["Tracks", "Risk Assessment"], True, source=alarm22_label(),
+                    kommuner=["Tromsø (5501)"]), None)
+    out = "".join(capfd.readouterr())
+    assert "1_Lyngen" in out and "2_Tromso" in out
+    layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
+    risk = layers["risk - Tromsø - single - ALARM2_2"]
+    tracks = layers["tracks - Tromsø - single - ALARM2_2"]
+    ids = [r[0] for r in arcpy.da.SearchCursor(risk, ["bld_id"])]
+    assert ids and len(ids) == len(set(ids))                         # each building once
+    regions = {r[0] for r in arcpy.da.SearchCursor(tracks, ["alarm_region"])}
+    assert regions <= {"1_Lyngen", "2_Tromso"} and "2_Tromso" in regions
+    assert "Kommune: Tromsø" in layers
+

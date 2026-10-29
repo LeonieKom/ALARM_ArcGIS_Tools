@@ -52,10 +52,19 @@ def std_source():
     return f"{config.STANDARD_SOURCE}  ({cfg['sources'][config.STANDARD_SOURCE]})"
 
 
-def load_params(regions, scenarios, data_types, group=True, source=None, folder=None):
-    """The parameters of 'Load ALARM Data', in dialog order and with their names."""
-    return [P(source or std_source(), "source"), P(folder, "source_folder"), P(regions, "region"),
-            P(scenarios, "scenario"), P(data_types, "data_types"), P(group, "use_group")]
+MODE_REGIONS = "Forecast regions (Varslingsregioner)"
+MODE_KOMMUNER = "Municipalities (Kommuner)"
+LOAD_NAMES = ["source", "source_folder", "load_by", "region", "municipalities", "scenario", "data_types", "use_group"]
+
+
+def load_params(regions, scenarios, data_types, group=True, source=None, folder=None, kommuner=None):
+    """The parameters of 'Load ALARM Data', in dialog order and with their names.
+
+    With kommuner the municipality mode is used (regions are then ignored).
+    """
+    values = [source or std_source(), folder, MODE_KOMMUNER if kommuner else MODE_REGIONS, regions, kommuner,
+              scenarios, data_types, group]
+    return [P(v, n) for v, n in zip(values, LOAD_NAMES)]
 
 
 COMPARE_NAMES = ["source", "source_folder", "region", "municipalities", "scenarios", "elev_min", "elev_max",

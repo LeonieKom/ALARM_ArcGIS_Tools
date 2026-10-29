@@ -185,6 +185,16 @@ def _refresh_source_dependent(source, folder, region, scenarios, cfg, multi_regi
     scenarios.value = [by_id[v.split(' - ')[0]] for v in kept] or None
 
 
+class _NoParam:
+    valueAsText = None
+
+    def setErrorMessage(self, message):
+        pass
+
+
+P_NONE = _NoParam()
+
+
 def _check_source(source, folder, region, scenarios, cfg):
     """Errors for an unreachable data source or empty choices (updateMessages)."""
     name, base = _selected_source(source, folder, cfg)
@@ -239,6 +249,34 @@ def _region_bbox(base, region):
     return _data.union_extent(_data.shp_extent(f) for f in files)
 
 
+_REGION_BBOX = {}
+
+
+def _region_bbox_cached(base, region):
+    key = (str(base), region)
+    if key not in _REGION_BBOX:
+        _REGION_BBOX[key] = _region_bbox(base, region)
+    return _REGION_BBOX[key]
+
+
+def _kommune_bbox(labels):
+    """Bounding box (EPSG:25833) of the selected municipalities, from the bundled list."""
+    wanted = {_kommune.number_of(t) for t in labels}
+    return _data.union_extent(k["bbox"] for k in _kommune.load_list() if k["nr"] in wanted)
+
+
+def _regions_for_kommuner(base, labels, bbox=None):
+    """Forecast regions of a data folder whose results overlap the municipalities' bounding box.
+
+    The dialog uses the bundled list; loading passes the box of the real boundaries.
+    """
+    bbox = bbox or _kommune_bbox(labels)
+    if not base or bbox is None:
+        return []
+    return [r for r in _data.completed_regions(base)
+            if (lambda e: e is not None and _kommune.bbox_overlaps(e, bbox))(_region_bbox_cached(base, r))]
+
+
 def _update_municipality_list(param, bbox):
     """Offer the municipalities that overlap bbox; keep what is still offered."""
     options = _kommune.labels_for(bbox) or _kommune.labels_for(None)
@@ -259,6 +297,17 @@ def _dataset_stamp(gdb):
 
 def _kommune_geometry(cfg, labels):
     """Union of the boundaries of the selected municipalities (EPSG:25833)."""
+    shapes = _kommune_shapes(cfg, labels)
+    if not shapes:
+        return None
+    union = shapes[0][1]
+    for _, shape in shapes[1:]:
+        union = union.union(shape)
+    return union
+
+
+def _kommune_shapes(cfg, labels):
+    """[(number, boundary)] of the selected municipalities (EPSG:25833), cached locally."""
     gdb = Path(cfg['kommune_gdb'])
     try:
         stamp = _dataset_stamp(gdb)
@@ -276,7 +325,7 @@ def _kommune_geometry(cfg, labels):
             older = sorted(_KOMMUNE_CACHE.glob(f"{nr}_*.json"))
             cached = older[-1] if older else cached
         if cached.exists():
-            shapes.append(arcpy.AsShape(cached.read_text(encoding="utf-8"), True))
+            shapes.append((nr, arcpy.AsShape(cached.read_text(encoding="utf-8"), True)))
         else:
             missing.append((nr, cached))
     if missing:
@@ -295,13 +344,8 @@ def _kommune_geometry(cfg, labels):
                 arcpy.AddWarning(f"  Municipality {nr} not found in {gdb.name} - ignored")
                 continue
             cached.write_text(found[nr].JSON, encoding="utf-8")
-            shapes.append(found[nr])
-    if not shapes:
-        return None
-    union = shapes[0]
-    for shape in shapes[1:]:
-        union = union.union(shape)
-    return union
+            shapes.append((nr, found[nr]))
+    return shapes
 
 
 def _oids_inside(data, geometry):
@@ -435,6 +479,9 @@ class Toolbox(object):
 
 
 class LoadALARMData(object):
+    MODE_REGIONS = "Forecast regions (Varslingsregioner)"
+    MODE_KOMMUNER = "Municipalities (Kommuner)"
+
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "1. Load ALARM Data"
@@ -454,12 +501,23 @@ class LoadALARMData(object):
         cfg = _config.load_config()
         source, source_folder = _make_source_params(cfg)
 
-        # Parameter: Regions
+        # Load by forecast region or by municipality
+        load_by = arcpy.Parameter(
+            displayName="Load by",
+            name="load_by",
+            datatype="GPString",
+            parameterType="Required",
+            direction="Input")
+        load_by.filter.type = "ValueList"
+        load_by.filter.list = [self.MODE_REGIONS, self.MODE_KOMMUNER]
+        load_by.value = self.MODE_REGIONS
+
+        # Parameter: Regions (required in region mode; checked in updateMessages)
         param0 = arcpy.Parameter(
             displayName="Regions",
             name="region",
             datatype="GPString",
-            parameterType="Required",
+            parameterType="Optional",
             direction="Input",
             multiValue=True)
 
@@ -467,6 +525,10 @@ class LoadALARMData(object):
         regions = self._get_completed_regions()
         param0.filter.type = "ValueList"
         param0.filter.list = regions if regions else ["No regions found"]
+
+        # Municipalities (municipality mode): the tool finds the regions and cuts them to the municipalities
+        municipalities = _municipality_param()
+        municipalities.enabled = False
 
         # Parameter 1: Scenario
         param1 = arcpy.Parameter(
@@ -503,24 +565,52 @@ class LoadALARMData(object):
 
         param3.value = True
 
-        return [source, source_folder, param0, param1, param2, param3]
+        return [source, source_folder, load_by, param0, municipalities, param1, param2, param3]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Follow the chosen data source: its regions, and the scenarios found in them."""
+        """Follow the chosen data source and mode: regions or municipalities, and their scenarios."""
         p = _by_name(parameters)
+        cfg = _config.load_config()
+        kommune_mode = p['load_by'].valueAsText == self.MODE_KOMMUNER
+        p['region'].enabled = not kommune_mode
+        p['municipalities'].enabled = kommune_mode
         _refresh_source_dependent(p['source'], p['source_folder'], p['region'], p['scenario'],
-                                  _config.load_config(), multi_region=True)
+                                  cfg, multi_region=True)
+        if kommune_mode and (_edited(p['municipalities']) or _edited(p['load_by'])
+                             or _edited(p['source']) or _edited(p['source_folder'])):
+            name, base = _selected_source(p['source'], p['source_folder'], cfg)
+            if name == _config.STANDARD_SOURCE:
+                options = [f"{k} - {v}" for k, v in cfg['scenarios'].items()]
+            else:
+                kommuner = _split_values(p['municipalities'].valueAsText)
+                regions = _regions_for_kommuner(base, kommuner) if kommuner else []
+                found = _data.discover_scenarios(base, regions) if regions else {}
+                options = [f"{k} - {v}" for k, v in found.items()] or [SELECT_REGIONS_FIRST]
+            p['scenario'].filter.list = options
+            by_id = {o.split(' - ')[0]: o for o in options}
+            kept = [by_id[v.split(' - ')[0]] for v in _split_values(p['scenario'].valueAsText)
+                    if v.split(' - ')[0] in by_id]
+            p['scenario'].value = kept or None
         return
 
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
         parameter."""
         p = _by_name(parameters)
-        _check_source(p['source'], p['source_folder'], p['region'], p['scenario'], _config.load_config())
+        if p['load_by'].valueAsText == self.MODE_KOMMUNER:
+            if not p['municipalities'].valueAsText:
+                p['municipalities'].setErrorMessage("Select at least one municipality.")
+            elif p['scenario'].valueAsText and SELECT_REGIONS_FIRST in p['scenario'].valueAsText:
+                p['scenario'].setErrorMessage("No results in this data source overlap these municipalities.")
+            _check_source(p['source'], p['source_folder'], p['municipalities'], P_NONE, _config.load_config())
+        else:
+            if not p['region'].valueAsText:
+                p['region'].setErrorMessage("Select at least one region.")
+            _check_source(p['source'], p['source_folder'], p['region'], p['scenario'], _config.load_config())
         return
 
     def execute(self, parameters, messages):
@@ -547,6 +637,11 @@ class LoadALARMData(object):
         map_obj = aprx.activeMap
         if not map_obj:
             arcpy.AddError("No active map found. Please open a map in ArcGIS Pro.")
+            return
+
+        if p['load_by'].valueAsText == self.MODE_KOMMUNER:
+            self._load_kommuner(cfg, _split_values(p['municipalities'].valueAsText), scenario_ids, data_types,
+                                use_group, aprx, map_obj)
             return
 
         combinations = [(r, sid) for r in regions for sid in scenario_ids]
@@ -700,6 +795,13 @@ class LoadALARMData(object):
             group_name = f"{region} - Scenario {scenario_id}"
             if self.source_tag:
                 group_name += f" [{self.source_tag}]"
+            self._put_in_group(map_obj, group_name, layers_added)
+
+        return len(layers_added)
+
+    def _put_in_group(self, map_obj, group_name, layers_added):
+        """Move the added layers into a group layer (created if needed)."""
+        if layers_added:
             arcpy.AddMessage(f"Organizing layers in group: {group_name}")
             try:
                 # Check if group already exists
@@ -730,7 +832,247 @@ class LoadALARMData(object):
             except Exception as e:
                 arcpy.AddWarning(f"Could not organize group layer: {e}")
 
-        return len(layers_added)
+    # ------------------------------------------------------------ municipality mode --
+
+    def _load_kommuner(self, cfg, kommuner, scenario_ids, data_types, use_group, aprx, map_obj):
+        """Load the selected scenarios cut to the municipalities, all forecast regions together."""
+        if not kommuner:
+            arcpy.AddError("Select at least one municipality.")
+            return
+        names = ", ".join(_kommune.short_names(kommuner))
+        shapes = _kommune_shapes(cfg, kommuner)
+        if not shapes:
+            arcpy.AddError("None of the selected municipalities could be read.")
+            return
+        geometry = shapes[0][1]
+        for _, shape in shapes[1:]:
+            geometry = geometry.union(shape)
+        bbox = _data.union_extent((s.extent.XMin, s.extent.YMin, s.extent.XMax, s.extent.YMax) for _, s in shapes)
+        regions = _regions_for_kommuner(self.results_base, kommuner, bbox)
+        if not regions:
+            arcpy.AddError(f"No results in {self.results_base} overlap {names}.")
+            return
+        arcpy.AddMessage(f"Municipalities: {names}")
+        arcpy.AddMessage(f"Forecast regions that may overlap them: {', '.join(regions)}")
+        gdb = aprx.defaultGeodatabase
+        tag = f" [{self.source_tag}]" if self.source_tag else ""
+
+        # the boundaries, as their own layer above everything
+        boundary_fc = self._kommune_boundary_fc(gdb, kommuner, shapes)
+        if not self._already_loaded(map_obj, boundary_fc):
+            boundary = map_obj.addDataFromPath(boundary_fc)
+            boundary.name = f"{KOMMUNE_LAYER_PREFIX}{names}"
+            self._apply_boundary_symbology(boundary)
+
+        numbers = "_".join(sorted(_kommune.number_of(k) for k in kommuner))
+        total = 0
+        for sid in scenario_ids:
+            arcpy.AddMessage("")
+            arcpy.AddMessage(f"Scenario {sid}")
+            folders = [(r, self._find_scenario_dir(r, sid)) for r in regions]
+            folders = [(r, d) for r, d in folders if d]
+            if not folders:
+                arcpy.AddWarning(f"  No data for scenario {sid} in {', '.join(regions)} - skipped")
+                continue
+            layers_added = []
+            for kind, label, pattern in (("tracks", "Tracks", "tracks_*.shp"), ("pras", "PRAs", "pra_*.shp"),
+                                         ("risk", "Risk Assessment", None)):
+                if label not in data_types:
+                    continue
+                sources = []
+                for region, folder in folders:
+                    if kind == "risk":
+                        risk_dir = folder / "risk_assessment"
+                        found = _data.find_risk_file(risk_dir, warn=arcpy.AddWarning) if risk_dir.exists() else None
+                    else:
+                        found = self._find_file(folder, pattern)
+                    if found:
+                        sources.append((region, found))
+                layer = self._load_cut_layer(map_obj, gdb, kind, sid, sources, geometry, numbers, names, tag)
+                if layer is not None:
+                    layers_added.append(layer)
+            for label, prefix in (("PPR Raster", "ppr"), ("PFV Raster", "pfv"), ("PFT Raster", "pft")):
+                if label not in data_types:
+                    continue
+                for region, folder in folders:
+                    raster = self._find_file(folder, f"{prefix}_*.tif")
+                    if raster:
+                        layer = self._load_cut_raster(map_obj, gdb, raster, boundary_fc, region, numbers, names, sid)
+                        if layer is not None:
+                            layers_added.append(layer)
+            if use_group:
+                self._put_in_group(map_obj, f"{names} - Scenario {sid}{tag}", layers_added)
+            total += len(layers_added)
+        arcpy.AddMessage("")
+        arcpy.AddMessage(f"Successfully loaded {total} layers for {names}")
+
+    def _cut_name(self, kind, sid, sources, numbers):
+        """Name of the cached cut-out: changes when a source file or the municipalities change."""
+        import hashlib
+        parts = [numbers, kind, sid, self.source_tag]
+        for region, path in sources:
+            try:
+                st = Path(path).stat()
+                parts.append(f"{region}|{path}|{st.st_size}|{int(st.st_mtime)}")
+            except OSError:
+                parts.append(f"{region}|{path}")
+        digest = hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:10]
+        return re.sub(r"[^0-9A-Za-z_]", "_", f"k{numbers[:40]}_{kind}_{sid}_{digest}")
+
+    def _reading_path(self, path):
+        """What arcpy reads for a result file: its optimized copy if up to date, else a resolvable path."""
+        copy = self._optimized(path)
+        return str(copy) if copy is not None else str(_resolvable_shapefile(path))
+
+    def _load_cut_layer(self, map_obj, gdb, kind, sid, sources, geometry, numbers, names, tag):
+        """Tracks / PRAs / buildings of all regions inside the municipalities, as one layer."""
+        if not sources:
+            arcpy.AddWarning(f"  {kind}: no files found")
+            return None
+        fc = os.path.join(gdb, self._cut_name(kind, sid, sources, numbers))
+        if arcpy.Exists(fc):
+            arcpy.AddMessage(f"  {kind}: using the cut-out made earlier (sources unchanged)")
+        else:
+            fc = self._cut_and_merge(kind, sources, geometry, fc)
+            if fc is None:
+                arcpy.AddWarning(f"  {kind}: nothing inside {names}")
+                return None
+        if self._already_loaded(map_obj, fc):
+            return None
+        layer = map_obj.addDataFromPath(fc)
+        # unique names without brackets: arcpy resolves layers by name in some contexts
+        prefix = {"tracks": "tracks", "pras": "pra", "risk": "risk"}[kind]
+        layer.name = f"{prefix} - {names} - {sid}" + (f" - {self.source_tag}" if self.source_tag else "")
+        if kind == "tracks":
+            self._apply_tracks_symbology(layer)
+        elif kind == "pras":
+            self._apply_pra_symbology(layer)
+        else:
+            self._apply_risk_symbology(layer)
+        return layer
+
+    def _cut_and_merge(self, kind, sources, geometry, fc):
+        """Select what lies (partly) inside geometry in every source, merge, drop duplicate buildings."""
+        parts = []
+        for region, path in sources:
+            name = f"alarm_cut_{uuid.uuid4().hex[:8]}"
+            arcpy.management.MakeFeatureLayer(self._reading_path(path), name)
+            try:
+                arcpy.management.SelectLayerByLocation(name, "INTERSECT", geometry)
+                count = int(arcpy.management.GetCount(name)[0])
+                arcpy.AddMessage(f"  {kind}: {count} features from {region}")
+                if not count:
+                    continue
+                part = f"memory\\alarm_part_{uuid.uuid4().hex[:8]}"
+                mappings = self._numeric_mappings(name) if kind == "pras" else None
+                if mappings is not None:
+                    arcpy.conversion.ExportFeatures(name, part, field_mapping=mappings)
+                else:
+                    arcpy.conversion.ExportFeatures(name, part)
+                arcpy.management.AddField(part, "alarm_region", "TEXT", field_length=60)
+                arcpy.management.CalculateField(part, "alarm_region", repr(region), "PYTHON3")
+                parts.append(part)
+            finally:
+                arcpy.management.Delete(name)
+        if not parts:
+            return None
+        arcpy.management.Merge(parts, fc)
+        for part in parts:
+            arcpy.management.Delete(part)
+        if kind == "risk":
+            dropped = self._drop_duplicate_buildings(fc)
+            if dropped:
+                arcpy.AddMessage(f"  risk: {dropped} buildings were in more than one region - kept once "
+                                 f"(highest max PPR)")
+        return fc
+
+    def _numeric_mappings(self, layer_name):
+        """Field mappings that turn the PRA numbers stored as text into DOUBLE (None if not needed)."""
+        mappings = arcpy.FieldMappings()
+        mappings.addTable(layer_name)
+        numeric_fields = {"elev_med", "aspect_deg", "area_m2", "t_high", "t_low"}
+        changed = False
+        for i in range(mappings.fieldCount):
+            fmap = mappings.getFieldMap(i)
+            out_field = fmap.outputField
+            if out_field.name.lower() in numeric_fields and out_field.type == "String":
+                out_field.type = "Double"
+                fmap.outputField = out_field
+                mappings.replaceFieldMap(i, fmap)
+                changed = True
+        return mappings if changed else None
+
+    def _drop_duplicate_buildings(self, fc):
+        """Keep each bld_id once (highest max_ppr); returns the number of rows removed."""
+        names = {f.name.lower(): f.name for f in arcpy.ListFields(fc)}
+        if "bld_id" not in names or "max_ppr" not in names:
+            return 0
+        records = [{'oid': oid, 'bld_id': bld, 'max_ppr': ppr}
+                   for oid, bld, ppr in arcpy.da.SearchCursor(fc, ["OID@", names["bld_id"], names["max_ppr"]])]
+        kept, dropped = _report.merge_buildings(records)
+        if dropped:
+            keep = {r['oid'] for r in kept}
+            with arcpy.da.UpdateCursor(fc, ["OID@"]) as cursor:
+                for (oid,) in cursor:
+                    if oid not in keep:
+                        cursor.deleteRow()
+        return dropped
+
+    def _load_cut_raster(self, map_obj, gdb, raster, boundary_fc, region, numbers, names, sid):
+        """A result raster cut to the municipalities (one per region; NoData outside)."""
+        out = os.path.join(gdb, self._cut_name(raster.stem.split("_")[0], sid, [(region, raster)], numbers))
+        if not arcpy.Exists(out):
+            source = self._optimized(raster) or raster
+            arcpy.AddMessage(f"  Cutting {raster.name} to {names}")
+            try:
+                arcpy.management.Clip(str(source), "#", out, boundary_fc, "#", "ClippingGeometry",
+                                      "NO_MAINTAIN_EXTENT")
+            except Exception as e:
+                arcpy.AddWarning(f"  Could not cut {raster.name}: {e}")
+                return None
+        if self._already_loaded(map_obj, out):
+            return None
+        layer = map_obj.addDataFromPath(out)
+        layer.name = f"{raster.stem.split('_')[0]} - {names} - {sid} - {region}"
+        lyrx = raster.with_suffix(".lyrx")
+        if lyrx.exists():
+            self._apply_lyrx(layer, lyrx)
+        elif raster.stem.startswith("ppr"):
+            self._apply_ppr_symbology(layer)
+        return layer
+
+    def _kommune_boundary_fc(self, gdb, kommuner, shapes):
+        """Feature class with the boundaries of the selected municipalities (one row each)."""
+        numbers = sorted(nr for nr, _ in shapes)
+        name = "kommune_" + "_".join(numbers)
+        if len(name) > 60:
+            import hashlib
+            name = "kommune_" + hashlib.sha1(name.encode()).hexdigest()[:10]
+        fc = os.path.join(gdb, name)
+        if arcpy.Exists(fc):
+            return fc
+        arcpy.management.CreateFeatureclass(gdb, name, "POLYGON", spatial_reference=arcpy.SpatialReference(25833))
+        arcpy.management.AddField(fc, "kommunenummer", "TEXT", field_length=4)
+        arcpy.management.AddField(fc, "kommunenavn", "TEXT", field_length=120)
+        labels = {_kommune.number_of(k): k for k in kommuner}
+        with arcpy.da.InsertCursor(fc, ["SHAPE@", "kommunenummer", "kommunenavn"]) as cursor:
+            for nr, shape in shapes:
+                cursor.insertRow((shape, nr, _kommune.short_names([labels.get(nr, nr)])[0]))
+        return fc
+
+    def _apply_boundary_symbology(self, layer):
+        """Municipality boundary: dark red outline, no fill."""
+        try:
+            sym = layer.symbology
+            if hasattr(sym, 'renderer'):
+                sym.updateRenderer('SimpleRenderer')
+                symbol = sym.renderer.symbol
+                symbol.color = {'RGB': [0, 0, 0, 0]}
+                symbol.outlineColor = {'RGB': [139, 0, 0, 100]}
+                symbol.outlineWidth = 2.5
+                layer.symbology = sym
+        except Exception as e:
+            arcpy.AddWarning(f"Could not style the municipality boundary: {e}")
 
     def _optimized(self, path):
         """Up-to-date optimized copy of a result file (see alarm_core.data.optimized_copy), or None."""
