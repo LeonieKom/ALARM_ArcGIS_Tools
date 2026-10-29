@@ -43,17 +43,26 @@ For permanent access:
 
 **Tool:** `Load ALARM Data`
 
-Loads data for a specific region and scenario with automatic symbology.
+Loads data for forecast regions or for municipalities, with automatic symbology.
 
 **Parameters:**
 - **Data Source**: where the data come from: the standard results (`L:\ALARM\Results`), the **ALARM2.2** test runs (`L:\ALARM\ALARM2.2`), or **Other folder...** (then choose the **Data Folder**, the one that contains the region folders). The region and scenario lists follow the choice. More sources can be added in the config (see [Configuration](#configuration)).
-- **Regions**: one or several regions (e.g., Vest_Finnmark, Nord_Troms)
+- **Load by**: *Forecast regions (Varslingsregioner)* as before, or *Municipalities (Kommuner)* (see below)
+- **Regions**: one or several regions (e.g., Vest_Finnmark, Nord_Troms); in region mode
+- **Municipalities (Kommuner)**: one or several municipalities; in municipality mode
 - **Scenarios**: one or several scenarios (A, B, C, D, E). For other data sources the list shows what the selected regions contain; a single-scenario run without scenario id appears as `single`.
   - Every selected region is combined with every selected scenario; each combination gets its own group layer. A combination without data is skipped with a warning.
 - **Data Types**: Choose which layers to load (PPR Raster, PFV Raster, PFT Raster, Tracks, PRAs, Risk Assessment). PFV/PFT use the `.lyrx` next to the raster.
 - **Add to Group Layer**: Organize layers in a group (default: Yes)
 
-**What it does:**
+**Municipality mode** - work with a municipality without caring about forecast regions:
+- The tool finds the forecast regions whose results reach into the selected municipalities, keeps from each of them only what lies (at least partly) inside, and merges the regions: per scenario you get one layer each, e.g. `tracks - Tromsø - D`, `pra - Tromsø - D`, `risk - Tromsø - D`, in the group `Tromsø - Scenario D`. A field `alarm_region` says which region a feature came from
+- A building that is in two regions (neighbouring regions overlap) is kept once, with its highest max PPR
+- Rasters are cut to the municipality (one layer per region, NoData outside)
+- The **boundaries** of the selected municipalities are drawn as their own layer (`Kommune: Tromsø`, dark red outline)
+- The cut-outs are stored in the project geodatabase and reused as long as the result files are unchanged, so loading the same municipality again is fast. The first time, the spatial selection on the large region layers takes a while (faster with optimized copies)
+
+**What it does (region mode):**
 - Finds data in `<data folder>\{region}\merged\{scenario}\` (or directly in `merged\` for a single-scenario run, see [Data Structure](#data-structure))
 - Layers and groups from a data source other than the standard results carry its name, e.g. `1_Lyngen - Scenario single [ALARM2_2]`, so two sources can be loaded side by side
 - Loads selected layers into current map
@@ -116,10 +125,10 @@ Min Max PPR: 25 kPa
 
 **Tool:** `Generate Report`
 
-Generate detailed statistics report for Risk Assessment layer.
+Generate a detailed statistics report for one or several Risk Assessment layers.
 
 **Parameters:**
-- **Risk Assessment Layer**: Select from current map
+- **Risk Assessment Layers**: one or several from the current map, e.g. the risk layers of all forecast regions a municipality lies in. They are combined; a building in more than one layer (same `bld_id`) is counted once, with its highest max PPR, and the report says how many there were
 - **Output Directory**: Where to save the report
 - **Report Format**: HTML, CSV, or Both
 - **Include map**: an interactive map in the HTML report (default: yes)
@@ -134,7 +143,7 @@ Generate detailed statistics report for Risk Assessment layer.
   - Distribution by Aspect (N, NE, E, SE, S, SW, W, NW)
   - Min/Max/Average PPR values
 - Creates formatted HTML report with tables and percentages; it names the layer, its filter (readable name and SQL) and a selection, if any
-- **Map** (HTML): all buildings of the report on a Kartverket background map (OpenStreetMap as alternative), coloured by max PPR like the layer; click a building for its values. Buildings closer than 500 m to each other form an *affected area*: a table lists the areas (buildings, highest max PPR, safety classes) with a *Zoom* button, and the largest 12 areas get their own small map. All maps can be zoomed and moved. Opening the report needs internet access for the map (Leaflet and the background tiles); the tables work without it
+- **Map** (HTML): all buildings of the report on a Kartverket background map (OpenStreetMap as alternative), coloured by max PPR like the layer; click a building for its values. As background: the avalanche tracks (very light blue) and PRAs (thin black outline) of the same group(s) as the risk layers, within 1 km of the buildings, and municipality boundaries (`Kommune: ...` layers). Buildings closer than 500 m to each other form an *affected area*: a priority table lists the areas, highest max PPR first, with a *Zoom* button, and the first 12 get their own small map. All maps can be zoomed and moved. Opening the report needs internet access for the map (Leaflet and the background tiles); the tables work without it
 - Optional CSV export for further analysis
 
 **Example:**
@@ -313,7 +322,7 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 160 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 167 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
 - `tests/test_arcpy_sources.py` (data source switch, single-scenario runs) needs only arcpy and a project file (`ALARM_TEST_APRX`): it creates tiny shapefiles in the layout of a single-scenario run. Two of its tests also use the real `L:\ALARM\ALARM2.2` folder when it is reachable.
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
 - If optimized copies of that scenario exist, the integration tests load from them. Run them a second time with `ALARM_OPTIMIZED_BASE` set to an empty value to cover loading from the originals.
