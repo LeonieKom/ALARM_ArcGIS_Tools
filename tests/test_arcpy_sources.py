@@ -17,7 +17,7 @@ import pytest
 arcpy = pytest.importorskip("arcpy")
 
 from alarm_core import config, data, filters as f   # noqa: E402
-from arcpy_helpers import P, compare_params, env_context, load_params   # noqa: E402
+from arcpy_helpers import P, compare_params, env_context, filter_params, load_params   # noqa: E402
 
 APRX = os.environ.get("ALARM_TEST_APRX")
 pytestmark = pytest.mark.skipif(not APRX or not Path(APRX).exists(), reason="set ALARM_TEST_APRX to a .aprx file")
@@ -194,8 +194,9 @@ def test_the_layers_of_a_flat_run_work_with_filter_report_and_export(env, run_fo
     pras = f"pra_{REGION}_A_s_run1"
     long = {l.name: l.longName for l in env.map.listLayers() if l.isFeatureLayer}
     tool = env.mod.FilterLayers()
-    tool.execute([P([long[tracks], long[pras], long[risk]]), P(200), P(None), P("Cardinal Directions"),
-                  P(["E", "S", "N"]), P(None), P(None), P(["S2", "S3"]), P(None), P(tool.MODE_REPLACE), P(True)], None)
+    tool.execute(filter_params([long[tracks], long[pras], long[risk]],
+                               f.make_criteria(elev_min=200, aspect_type=f.ASPECT_CARDINAL, cardinal=["E", "S", "N"],
+                                               saf_classes=["S2", "S3"]), tool.MODE_REPLACE, True), None)
     layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
     # from 200 m up, aspect E, S or N: tracks (200, 100 E), (300, 200 S), (400, 350 N)
     assert int(arcpy.management.GetCount(layers[tracks])[0]) == 3
@@ -314,3 +315,187 @@ def test_alarm22_loads_and_matches_the_comparison(env, tmp_path, capfd):
                                                            delimiter=";")}
     assert rows["Avalanche tracks"] == [f"{int(arcpy.management.GetCount(tracks)[0]):,} / {int(arcpy.management.GetCount(tracks)[0]):,}"]
     assert rows["Buildings in risk assessment"][0].endswith(f"/ {int(arcpy.management.GetCount(risk)[0]):,}")
+
+
+# ---------------------------------------------------------------- municipality filter --
+
+import csv as _csv
+import json as _json
+import re as _re
+import shutil as _shutil
+
+
+@pytest.fixture(scope="module")
+def test_kommune(tmp_path_factory):
+    """A geodatabase like the Kartverket one with one municipality covering the first two squares."""
+    folder = tmp_path_factory.mktemp("kommune")
+    arcpy.management.CreateFileGDB(str(folder), "k.gdb")
+    gdb = folder / "k.gdb"
+    arcpy.management.CreateFeatureclass(str(gdb), "kommune", "POLYGON", spatial_reference=arcpy.SpatialReference(25833))
+    arcpy.management.AddField(str(gdb / "kommune"), "kommunenummer", "TEXT", field_length=4)
+    arcpy.management.AddField(str(gdb / "kommune"), "kommunenavn", "TEXT", field_length=50)
+    area = arcpy.Polygon(arcpy.Array([arcpy.Point(-0.5, -1), arcpy.Point(3.5, -1), arcpy.Point(3.5, 2),
+                                      arcpy.Point(-0.5, 2)]), arcpy.SpatialReference(25833))
+    with arcpy.da.InsertCursor(str(gdb / "kommune"), ["SHAPE@", "kommunenummer", "kommunenavn"]) as cursor:
+        cursor.insertRow((area, "9901", "Testkommune"))
+    return gdb
+
+
+@pytest.fixture
+def kommune_env(env, test_kommune, monkeypatch, tmp_path):
+    monkeypatch.setenv("ALARM_KOMMUNE_GDB", str(test_kommune))
+    monkeypatch.setattr(env.mod, "_KOMMUNE_CACHE", tmp_path / "kommune_cache")
+    return env
+
+
+TEST_KOMMUNE = ["Testkommune (9901)"]
+
+
+def flat_layers(env):
+    layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
+    tracks = next(n for n in layers if n.startswith("tracks_1_Lyngen_A_"))
+    risk = next(n for n in layers if n.startswith("risk_assessment_1_Lyngen_A_"))
+    pras = f"pra_{REGION}_A_s_run1"
+    long = {l.name: l.longName for l in env.map.listLayers() if l.isFeatureLayer}
+    return [long[tracks], long[pras], long[risk]], (tracks, pras, risk)
+
+
+def current(env, name):
+    return {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}[name]
+
+
+def active_names(layer):
+    return [q['name'] for q in layer.listDefinitionQueries() if q['isActive']]
+
+
+def test_filter_by_municipality_keeps_what_lies_inside(kommune_env, run_folder, test_kommune):
+    env = kommune_env
+    names, (tracks, pras, risk) = flat_layers(env)
+    tool = env.mod.FilterLayers()
+    tool.execute(filter_params(names, f.make_criteria(kommuner=TEST_KOMMUNE), tool.MODE_REPLACE, True), None)
+    counts = [int(arcpy.management.GetCount(current(env, n))[0]) for n in (tracks, pras, risk)]
+    assert counts == [2, 2, 2]                                 # the squares at x 0-1 and 2-3
+    assert active_names(current(env, tracks)) == ["ALARM: Kommune Testkommune"]
+    cached = list(env.mod._KOMMUNE_CACHE.glob("9901_*.json"))
+    assert len(cached) == 1                                    # boundary cached locally ...
+    assert cached[0].name == f"9901_{env.mod._dataset_stamp(test_kommune)}.json"   # ... under a stable key
+    reads = []
+    real_cursor = arcpy.da.SearchCursor
+    try:
+        arcpy.da.SearchCursor = lambda *a, **k: reads.append(a[0]) or real_cursor(*a, **k)
+        env.mod._kommune_geometry(env.mod._config.load_config(), TEST_KOMMUNE)
+    finally:
+        arcpy.da.SearchCursor = real_cursor
+    assert not any("kommune" in str(r) for r in reads)        # the second time it is not read again
+
+    # refine: in the municipality AND from 200 m up -> only the track at 200 m
+    tool.execute(filter_params([names[0]], f.make_criteria(elev_min=200), tool.MODE_REFINE, True), None)
+    assert int(arcpy.management.GetCount(current(env, tracks))[0]) == 1
+    assert active_names(current(env, tracks)) == ["ALARM: Kommune Testkommune + >= 200 m"]
+
+    # reset removes the named filter as well
+    tool.execute(filter_params([names[0]], None, tool.MODE_RESET), None)
+    assert not current(env, tracks).definitionQuery
+    assert active_names(current(env, tracks)) == []
+
+
+def test_a_selection_does_not_shrink_the_municipality_set(kommune_env, run_folder):
+    env = kommune_env
+    names, (tracks, pras, risk) = flat_layers(env)
+    layer = current(env, risk)
+    layer.setSelectionSet([0], "NEW")                          # one building selected
+    try:
+        tool = env.mod.FilterLayers()
+        tool.execute(filter_params([names[2]], f.make_criteria(kommuner=TEST_KOMMUNE)), None)
+        layer = current(env, risk)
+        assert len(layer.getSelectionSet() or []) == 1         # the selection is restored
+        layer.setSelectionSet([], "NEW")
+        assert int(arcpy.management.GetCount(layer)[0]) == 2   # the filter covers both buildings inside
+    finally:
+        current(env, risk).setSelectionSet([], "NEW")
+
+
+def test_report_states_the_municipality_and_contains_the_map(kommune_env, run_folder, tmp_path):
+    env = kommune_env
+    names, (tracks, pras, risk) = flat_layers(env)
+    tool = env.mod.FilterLayers()
+    tool.execute(filter_params([names[2]], f.make_criteria(kommuner=TEST_KOMMUNE)), None)
+    env.mod.GenerateReport().execute([P(current(env, risk)), P(str(tmp_path)), P("HTML"), P(True)], None)
+    html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+    assert "<strong>Filter:</strong> ALARM: Kommune Testkommune" in html
+    assert "Filter (SQL)" in html
+    assert 'id="alarm-map"' in html and "leaflet" in html
+    data = _json.loads(_re.search(r'<script type="application/json" id="alarm-data">(.*?)</script>', html,
+                                  _re.S).group(1))
+    points = [x for x in data['features'] if not x['properties'].get('outline')]
+    assert len(points) == 2 and sum(a['buildings'] for a in data['areas']) == 2
+    lon, lat = points[0]['geometry']['coordinates']
+    assert -180 <= lon <= 180 and -90 <= lat <= 90                 # projected to WGS84
+    assert len([x for x in data['features'] if x['properties'].get('outline')]) == 2   # building outlines
+    props = points[0]['properties']
+    assert props['saf_class'] in ("S1", "S2") and isinstance(props['max_ppr'], float)   # values under their own names
+    assert 'bld_id' not in props                                    # this layer has no bld_id field
+
+
+def test_report_without_map(kommune_env, run_folder, tmp_path):
+    env = kommune_env
+    names, (tracks, pras, risk) = flat_layers(env)
+    env.mod.GenerateReport().execute([P(current(env, risk)), P(str(tmp_path)), P("HTML"), P(False)], None)
+    assert "leaflet" not in next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+
+
+def test_compare_counts_inside_the_municipality(kommune_env, run_folder, tmp_path):
+    env = kommune_env
+    env.mod.CompareScenarios().execute(
+        compare_params(REGION, ["A - x"], out=str(tmp_path), fmt="Both", source=OTHER, folder=str(run_folder),
+                       kommuner=TEST_KOMMUNE), None)
+    rows = {r[0]: r[1:] for r in _csv.reader(open(next(tmp_path.glob("compare_*.csv")), encoding="utf-8-sig"),
+                                             delimiter=";")}
+    assert rows["Avalanche tracks"] == ["2 / 2"]                   # totals refer to the municipality
+    assert rows["PRAs"] == ["2 / 2"]
+    assert rows["Buildings in risk assessment"] == ["2 / 2"]
+    assert "Municipality: Testkommune (9901)" in next(tmp_path.glob("compare_*.html")).read_text(encoding="utf-8")
+
+
+def test_a_shapefile_with_a_dot_in_its_name_can_be_used_spatially(env, run_folder, tmp_path, test_kommune):
+    source = next((run_folder / REGION / "merged").glob("tracks_*.shp"))
+    stem = "tracks_R_A_80-60_prox0_rel1.2m"
+    for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
+        if source.with_suffix(ext).exists():
+            _shutil.copy(source.with_suffix(ext), tmp_path / (stem + ext))
+    usable = env.mod._resolvable_shapefile(tmp_path / (stem + ".shp"))
+    assert "." not in usable.stem
+    geometry = next(arcpy.da.SearchCursor(str(test_kommune / "kommune"), ["SHAPE@"]))[0]
+    assert env.mod._oids_inside(str(usable), geometry) == {0, 1}   # FIDs = record positions
+
+
+def test_the_dialogs_offer_all_municipalities_without_layers(env):
+    labels = env.mod._kommune.labels_for(None)
+    assert len(labels) == 357 and "Tromsø (5501)" in labels and "Harstad - Hárstták (5503)" in labels
+    params = filter_params([], None)
+    by = {p.name: p for p in params}
+    by["layers_to_filter"].altered, by["layers_to_filter"].hasBeenValidated = True, False
+    env.mod.FilterLayers().updateParameters(params)
+    assert by["municipalities"].filter.list == labels                # nothing to narrow it down with
+
+
+@needs_alarm22
+def test_real_municipality_filter_on_alarm22(env, tmp_path, monkeypatch):
+    """Lyngen layers of the ALARM2.2 run: the list offers Lyngen, and filtering by it keeps features."""
+    monkeypatch.setattr(env.mod, "_KOMMUNE_CACHE", tmp_path / "kommune_cache")
+    env.mod.LoadALARMData().execute(
+        load_params(["1_Lyngen"], [f"{data.FLAT_NO_ID} - x"], ["Risk Assessment"], True, source=alarm22_label()), None)
+    layer = next(l for l in env.map.listLayers() if l.isFeatureLayer and l.name.startswith("risk_assessment_1_Lyngen"))
+    tool = env.mod.FilterLayers()
+    params = filter_params([layer], None)
+    by = {p.name: p for p in params}
+    by["layers_to_filter"].altered, by["layers_to_filter"].hasBeenValidated = True, False
+    tool.updateParameters(params)
+    offered = by["municipalities"].filter.list
+    lyngen = [x for x in offered if x.startswith("Lyngen")]
+    assert lyngen and not any(x.startswith("Oslo") for x in offered) and len(offered) < 40
+    total = int(arcpy.management.GetCount(layer)[0])
+    tool.execute(filter_params([layer.longName], f.make_criteria(kommuner=lyngen), tool.MODE_REPLACE, True), None)
+    layer = next(l for l in env.map.listLayers() if l.isFeatureLayer and l.name.startswith("risk_assessment_1_Lyngen"))
+    inside = int(arcpy.management.GetCount(layer)[0])
+    assert 0 < inside <= total

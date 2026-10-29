@@ -21,8 +21,8 @@ import pytest
 arcpy = pytest.importorskip("arcpy")
 
 from alarm_core import compare, config, data, filters as f   # noqa: E402
-from arcpy_helpers import (COMPARE_NAMES, P, compare_params, env_context, load_params,   # noqa: E402,F401
-                           std_source, ProjectProxy)
+from arcpy_helpers import (COMPARE_NAMES, FILTER_NAMES, P, compare_params, env_context,   # noqa: E402,F401
+                           filter_params, load_params, std_source, ProjectProxy)
 
 ROOT = Path(__file__).resolve().parent.parent
 REGION = os.environ.get("ALARM_TEST_REGION", "02_Vest_Finnmark")
@@ -76,11 +76,7 @@ def long_names(env, *names):
 def run_filter(env, layer_names, criteria=None, mode=None, counts=False):
     """Call FilterLayers.execute with layer long names (as ArcGIS Pro passes them)."""
     tool = env.mod.FilterLayers()
-    c = criteria or f.make_criteria()
-    mode = mode or tool.MODE_REPLACE
-    tool.execute([P(long_names(env, *layer_names)), P(c['elev_min']), P(c['elev_max']), P(c['aspect_type']),
-                  P(c['cardinal'] or None), P(c['aspect_min']), P(c['aspect_max']),
-                  P(c['saf_classes'] or None), P(c['min_max_ppr']), P(mode), P(counts)], None)
+    tool.execute(filter_params(long_names(env, *layer_names), criteria, mode or tool.MODE_REPLACE, counts), None)
 
 
 def reset_all(env):
@@ -300,29 +296,31 @@ def test_a_selection_is_reported_by_filter_and_export(loaded, tmp_path, capfd):
     assert loaded.mod._selection_count(feature_layers(loaded)[loaded.risk]) == 0
 
 
-def filter_params(**kw):
-    c = f.make_criteria(**kw)
-    return [P(["x"]), P(c['elev_min']), P(c['elev_max']), P(c['aspect_type']), P(c['cardinal'] or None),
-            P(c['aspect_min']), P(c['aspect_max']), P(c['saf_classes'] or None), P(c['min_max_ppr']),
-            P("Replace existing filter"), P(False)]
+def dialog(**kw):
+    params = filter_params(["x"], f.make_criteria(**kw))
+    return params, {p.name: p for p in params}
 
 
 def test_filter_dialog_shows_problems_at_the_right_parameter(env):
     tool = env.mod.FilterLayers()
-    params = filter_params(elev_min=900, elev_max=100)
+    assert [p.name for p in tool.getParameterInfo()] == FILTER_NAMES
+    params, by = dialog(elev_min=900, elev_max=100)
     tool.updateMessages(params)
-    assert params[2].error and "lower than the minimum" in params[2].error
-    params = filter_params(aspect_type=f.ASPECT_CARDINAL)
+    assert by["elev_max"].error and "lower than the minimum" in by["elev_max"].error
+    params, by = dialog(aspect_type=f.ASPECT_CARDINAL)
     tool.updateMessages(params)
-    assert params[4].error
-    params = filter_params()
+    assert by["cardinal_dirs"].error
+    params, by = dialog()
     tool.updateMessages(params)
-    assert params[0].warning and "No filter criterion" in params[0].warning
-    params = filter_params()
-    params[9] = P(tool.MODE_RESET)
+    assert by["layers_to_filter"].warning and "No filter criterion" in by["layers_to_filter"].warning
+    params, by = dialog()
+    by["filter_mode"].value = tool.MODE_RESET
     tool.updateMessages(params)                             # a reset needs no criteria
-    assert params[0].warning is None
-    params = filter_params(elev_min=100)
+    assert by["layers_to_filter"].warning is None
+    params, by = dialog(kommuner=["Tromsø (5501)"])         # a municipality alone is a criterion
+    tool.updateMessages(params)
+    assert by["layers_to_filter"].warning is None
+    params, by = dialog(elev_min=100)
     tool.updateMessages(params)
     assert all(p.error is None and p.warning is None for p in params)
 
@@ -339,8 +337,7 @@ def test_compare_dialog_checks_region_and_degree_range(env, tmp_path):
 
 def test_unknown_layer_name_only_warns(loaded):
     tool = loaded.mod.FilterLayers()
-    tool.execute([P(["no such layer"]), P(100), P(None), P("None"), P(None), P(None), P(None), P(None), P(None),
-                  P(tool.MODE_REPLACE), P(False)], None)
+    tool.execute(filter_params(["no such layer"], f.make_criteria(elev_min=100)), None)
 
 
 # ----------------------------------------------------------------- report / export --

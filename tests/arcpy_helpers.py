@@ -9,7 +9,7 @@ from pathlib import Path
 
 import arcpy
 
-from alarm_core import config
+from alarm_core import config, filters as f
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,6 +33,12 @@ class P:
         self.warning = message
 
     @property
+    def values(self):
+        if self.value is None:
+            return None
+        return list(self.value) if isinstance(self.value, (list, tuple)) else [self.value]
+
+    @property
     def valueAsText(self):
         if self.value is None:
             return None
@@ -52,16 +58,29 @@ def load_params(regions, scenarios, data_types, group=True, source=None, folder=
             P(scenarios, "scenario"), P(data_types, "data_types"), P(group, "use_group")]
 
 
-COMPARE_NAMES = ["source", "source_folder", "region", "scenarios", "elev_min", "elev_max", "aspect_type",
-                 "cardinal_dirs", "aspect_min", "aspect_max", "saf_class", "min_max_ppr", "output_dir", "report_format"]
+COMPARE_NAMES = ["source", "source_folder", "region", "municipalities", "scenarios", "elev_min", "elev_max",
+                 "aspect_type", "cardinal_dirs", "aspect_min", "aspect_max", "saf_class", "min_max_ppr", "output_dir",
+                 "report_format"]
 
 
 def compare_params(region, scenarios, emin=None, emax=None, aspect="None", cardinal=None, amin=None, amax=None,
-                   saf=None, ppr=None, out="", fmt="HTML", source=None, folder=None):
+                   saf=None, ppr=None, out="", fmt="HTML", source=None, folder=None, kommuner=None):
     """The parameters of 'Compare Scenarios', in dialog order and with their names."""
-    values = [source or std_source(), folder, region, scenarios, emin, emax, aspect, cardinal, amin, amax, saf, ppr,
-              out, fmt]
+    values = [source or std_source(), folder, region, kommuner, scenarios, emin, emax, aspect, cardinal, amin, amax,
+              saf, ppr, out, fmt]
     return [P(v, n) for v, n in zip(values, COMPARE_NAMES)]
+
+
+FILTER_NAMES = ["layers_to_filter", "municipalities", "elev_min", "elev_max", "aspect_type", "cardinal_dirs",
+                "aspect_min", "aspect_max", "saf_class", "min_max_ppr", "filter_mode", "count_features"]
+
+
+def filter_params(layers, criteria=None, mode="Replace existing filter", counts=False):
+    """The parameters of 'Filter Layers', in dialog order and with their names."""
+    c = criteria or f.make_criteria()
+    values = [layers, c.get('kommuner') or None, c['elev_min'], c['elev_max'], c['aspect_type'], c['cardinal'] or None,
+              c['aspect_min'], c['aspect_max'], c['saf_classes'] or None, c['min_max_ppr'], mode, counts]
+    return [P(v, n) for v, n in zip(values, FILTER_NAMES)]
 
 
 class ProjectProxy:

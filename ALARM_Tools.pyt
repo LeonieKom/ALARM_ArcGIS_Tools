@@ -18,7 +18,10 @@ import arcpy
 import importlib
 import os
 import re
+import shutil
 import sys
+import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -33,10 +36,12 @@ import alarm_core.dbf as _dbf
 import alarm_core.filters as _filters
 import alarm_core.compare as _compare
 import alarm_core.report as _report
+import alarm_core.kommune as _kommune
+import alarm_core.webmap as _webmap
 
 # ArcGIS Pro keeps imported modules for the whole session. Reloading them here makes
 # "Refresh" of the toolbox pick up edits without restarting Pro.
-for _module in (_config, _data, _dbf, _filters, _compare, _report):
+for _module in (_config, _data, _dbf, _filters, _kommune, _compare, _report, _webmap):
     importlib.reload(_module)
 
 
@@ -54,10 +59,10 @@ def _selection_count(layer):
 
 
 # Parameter index of each filter criterion in the two tools that use the criteria
-_FILTER_PARAMS = dict(any=0, elev_min=1, elev_max=2, aspect_type=3, cardinal=4, aspect_min=5, aspect_max=6,
-                      saf_classes=7, min_max_ppr=8)
-_COMPARE_PARAMS = dict(elev_min=4, elev_max=5, aspect_type=6, cardinal=7, aspect_min=8, aspect_max=9,
-                       saf_classes=10, min_max_ppr=11)
+_FILTER_PARAMS = dict(any=0, kommuner=1, elev_min=2, elev_max=3, aspect_type=4, cardinal=5, aspect_min=6,
+                      aspect_max=7, saf_classes=8, min_max_ppr=9)
+_COMPARE_PARAMS = dict(kommuner=3, elev_min=5, elev_max=6, aspect_type=7, cardinal=8, aspect_min=9, aspect_max=10,
+                       saf_classes=11, min_max_ppr=12)
 
 
 def _criteria_from(parameters, index):
@@ -72,7 +77,8 @@ def _criteria_from(parameters, index):
         aspect_min=p('aspect_min').value,
         aspect_max=p('aspect_max').value,
         saf_classes=_split_values(p('saf_classes').valueAsText),
-        min_max_ppr=p('min_max_ppr').value)
+        min_max_ppr=p('min_max_ppr').value,
+        kommuner=_split_values(p('kommuner').valueAsText) if 'kommuner' in index else None)
 
 
 def _show_validation(parameters, index, require_any=False):
@@ -192,6 +198,192 @@ def _check_source(source, folder, region, scenarios, cfg):
                                f"(L: connected) and does it contain <region>/merged? See alarm_core/config.py.")
     if scenarios.valueAsText and SELECT_REGIONS_FIRST in scenarios.valueAsText:
         scenarios.setErrorMessage("Select the regions first; the scenarios are read from their folders.")
+
+
+# --------------------------------------------------------------------- municipalities --
+# The dialogs list municipalities from alarm_core/kommuner.json (no L: access). The exact
+# boundaries come from the Kartverket dataset (config 'kommune_gdb') and are cached locally
+# per municipality, since reading them over L: can take long.
+_KOMMUNE_CACHE = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "ALARM_Tools" / "kommuner"
+
+
+def _municipality_param(display_name="Municipalities (Kommuner)"):
+    param = arcpy.Parameter(displayName=display_name, name="municipalities", datatype="GPString",
+                            parameterType="Optional", direction="Input", multiValue=True)
+    param.filter.type = "ValueList"
+    param.filter.list = _kommune.labels_for(None)
+    return param
+
+
+def _layer_bbox(values):
+    """Bounding box (EPSG:25833) of the given layers, or None."""
+    boxes = []
+    for value in values or []:
+        try:
+            extent = arcpy.Describe(value).extent
+            if extent.spatialReference and extent.spatialReference.factoryCode not in (None, 0, 25833):
+                extent = extent.projectAs(arcpy.SpatialReference(25833))
+            boxes.append((extent.XMin, extent.YMin, extent.XMax, extent.YMax))
+        except Exception:
+            continue
+    return _data.union_extent(boxes)
+
+
+def _region_bbox(base, region):
+    """Bounding box of a region's results, read from the shapefile headers (no arcpy)."""
+    if not base or not region:
+        return None
+    merged = Path(base) / region / "merged"
+    files = list(merged.glob("tracks_*.shp")) + list(merged.glob("*/tracks_*.shp")) \
+        + list(merged.glob("*/risk_assessment/*.shp")) + list(merged.glob("risk_assessment/*.shp"))
+    return _data.union_extent(_data.shp_extent(f) for f in files)
+
+
+def _update_municipality_list(param, bbox):
+    """Offer the municipalities that overlap bbox; keep what is still offered."""
+    options = _kommune.labels_for(bbox) or _kommune.labels_for(None)
+    param.filter.list = options
+    kept = [v for v in _split_values(param.valueAsText) if v in options]
+    param.value = kept or None
+
+
+def _dataset_stamp(gdb):
+    """Changes when the dataset's data change, not when it is only read.
+
+    Reading a file geodatabase creates lock files in its folder, so the folder's own time
+    changes all the time; the time of its table files (*.gdbtable) does not.
+    """
+    tables = list(gdb.glob("*.gdbtable"))
+    return int(max(p.stat().st_mtime for p in tables)) if tables else int(gdb.stat().st_mtime)
+
+
+def _kommune_geometry(cfg, labels):
+    """Union of the boundaries of the selected municipalities (EPSG:25833)."""
+    gdb = Path(cfg['kommune_gdb'])
+    try:
+        stamp = _dataset_stamp(gdb)
+    except OSError:
+        stamp = None  # dataset not reachable: use any cached copy
+    _KOMMUNE_CACHE.mkdir(parents=True, exist_ok=True)
+    shapes, missing = [], []
+    for text in labels:
+        nr = _kommune.number_of(text)
+        if nr is None:
+            arcpy.AddWarning(f"  Unknown municipality '{text}' - ignored")
+            continue
+        cached = _KOMMUNE_CACHE / f"{nr}_{stamp}.json"
+        if stamp is None:
+            older = sorted(_KOMMUNE_CACHE.glob(f"{nr}_*.json"))
+            cached = older[-1] if older else cached
+        if cached.exists():
+            shapes.append(arcpy.AsShape(cached.read_text(encoding="utf-8"), True))
+        else:
+            missing.append((nr, cached))
+    if missing:
+        if stamp is None:
+            raise RuntimeError(f"Municipality boundaries not reachable: {gdb}")
+        arcpy.AddMessage(f"  Reading the boundaries of {len(missing)} municipality(ies) from {gdb.name} "
+                         f"(once; cached in {_KOMMUNE_CACHE})")
+        numbers = ", ".join(f"'{nr}'" for nr, _ in missing)
+        found = {}
+        with arcpy.da.SearchCursor(str(gdb / "kommune"), ["kommunenummer", "SHAPE@"],
+                                   f"kommunenummer IN ({numbers})") as cursor:
+            for nr, shape in cursor:
+                found[nr] = found[nr].union(shape) if nr in found else shape
+        for nr, cached in missing:
+            if nr not in found:
+                arcpy.AddWarning(f"  Municipality {nr} not found in {gdb.name} - ignored")
+                continue
+            cached.write_text(found[nr].JSON, encoding="utf-8")
+            shapes.append(found[nr])
+    if not shapes:
+        return None
+    union = shapes[0]
+    for shape in shapes[1:]:
+        union = union.union(shape)
+    return union
+
+
+def _oids_inside(data, geometry):
+    """Object IDs of the features of a layer or feature class that intersect geometry."""
+    name = f"alarm_k_{uuid.uuid4().hex[:8]}"
+    arcpy.management.MakeFeatureLayer(data, name)
+    try:
+        arcpy.management.SelectLayerByLocation(name, "INTERSECT", geometry)
+        with arcpy.da.SearchCursor(name, ["OID@"]) as cursor:
+            return {row[0] for row in cursor}
+    finally:
+        arcpy.management.Delete(name)
+
+
+def _layer_oids_inside(layer, geometry):
+    """Like _oids_inside for a map layer, on all its features (not only filter or selection)."""
+    query = layer.definitionQuery or ""
+    try:
+        selection = layer.getSelectionSet()
+    except Exception:
+        selection = None
+    try:
+        layer.definitionQuery = ""
+        if selection:
+            layer.setSelectionSet([], "NEW")
+        return _oids_inside(layer, geometry)
+    finally:
+        layer.definitionQuery = query
+        if selection:
+            layer.setSelectionSet(list(selection), "NEW")
+
+
+_RESOLVABLE = {}
+
+
+def _resolvable_shapefile(shp):
+    """A path arcpy can open: shapefiles with a dot in the name are copied once under a clean name."""
+    shp = Path(shp)
+    if "." not in shp.stem:
+        return shp
+    key = (str(shp), shp.stat().st_mtime)
+    if key not in _RESOLVABLE:
+        target_dir = Path(tempfile.mkdtemp(prefix="alarm_shp_"))
+        clean = shp.stem.replace(".", "_")
+        for part in shp.parent.glob(shp.stem + ".*"):
+            suffix = part.name[len(shp.stem):]
+            if suffix.lower() in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
+                shutil.copy2(part, target_dir / (clean + suffix))
+        _RESOLVABLE[key] = target_dir / (clean + ".shp")
+    return _RESOLVABLE[key]
+
+
+def _filter_name(layer):
+    """Name of the layer's active definition query (the readable description), or None."""
+    try:
+        for query in layer.listDefinitionQueries():
+            if query.get('isActive'):
+                return query.get('name') or None
+    except Exception:
+        pass
+    return None
+
+
+def _set_filter(layer, sql, name=None):
+    """Set the layer's definition query; with a name (shown in Layer Properties and in reports)."""
+    if not sql:
+        try:
+            layer.updateDefinitionQueries([])
+        except Exception:
+            layer.definitionQuery = ""
+        return
+    if name:
+        try:
+            layer.updateDefinitionQueries([{'name': name[:250], 'sql': sql, 'isActive': True}])
+            return
+        except Exception:
+            pass
+    layer.definitionQuery = sql
+
+
+def _short_sql(sql, limit=300):
+    return sql if len(sql) <= limit else f"{sql[:limit]}... ({len(sql)} characters)"
 
 
 def _split_values(text):
@@ -801,6 +993,8 @@ class FilterLayers(object):
             direction="Input",
             multiValue=True)
 
+        municipalities = _municipality_param()
+
         # Parameter 1: Minimum Elevation (optional)
         param1 = arcpy.Parameter(
             displayName="Minimum Elevation (m)",
@@ -908,36 +1102,28 @@ class FilterLayers(object):
 
         param10.value = True
 
-        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10]
+        return [param0, municipalities, param1, param2, param3, param4, param5, param6, param7, param8, param9,
+                param10]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal validation is performed."""
-        # Enable/disable aspect parameters based on filter type
-        if parameters[3].value:  # aspect_type
-            aspect_type = parameters[3].valueAsText
-
-            if aspect_type == "Cardinal Directions":
-                parameters[4].enabled = True  # cardinal_dirs
-                parameters[5].enabled = False  # aspect_min
-                parameters[6].enabled = False  # aspect_max
-            elif aspect_type == "Degree Range":
-                parameters[4].enabled = False  # cardinal_dirs
-                parameters[5].enabled = True   # aspect_min
-                parameters[6].enabled = True   # aspect_max
-            else:  # "None"
-                parameters[4].enabled = False
-                parameters[5].enabled = False
-                parameters[6].enabled = False
-
+        """Municipality list for the chosen layers; aspect parameters for the aspect filter type."""
+        p = _by_name(parameters)
+        if _edited(p['layers_to_filter']):
+            _update_municipality_list(p['municipalities'], _layer_bbox(p['layers_to_filter'].values))
+        if p['aspect_type'].value:
+            aspect_type = p['aspect_type'].valueAsText
+            p['cardinal_dirs'].enabled = aspect_type == _filters.ASPECT_CARDINAL
+            p['aspect_min'].enabled = aspect_type == _filters.ASPECT_DEGREES
+            p['aspect_max'].enabled = aspect_type == _filters.ASPECT_DEGREES
         return
 
     def updateMessages(self, parameters):
         """Check the criteria before the tool runs (not needed for a reset)."""
-        if parameters[9].valueAsText != self.MODE_RESET:
+        if _by_name(parameters)['filter_mode'].valueAsText != self.MODE_RESET:
             _show_validation(parameters, _FILTER_PARAMS, require_any=True)
         return
 
@@ -947,10 +1133,20 @@ class FilterLayers(object):
         # Get parameters
         layer_names = _split_values(parameters[0].valueAsText)
         criteria = _criteria_from(parameters, _FILTER_PARAMS)
-        mode = parameters[9].valueAsText or self.MODE_REFINE
-        count_features = bool(parameters[10].value) if parameters[10].value is not None else True
+        p = _by_name(parameters)
+        mode = p['filter_mode'].valueAsText or self.MODE_REFINE
+        count_features = bool(p['count_features'].value) if p['count_features'].value is not None else True
         reset = mode == self.MODE_RESET
         refine = mode == self.MODE_REFINE
+
+        # Municipalities: one boundary for all layers (the features inside are found per layer)
+        kommune_geometry = None
+        if criteria['kommuner'] and not reset:
+            kommune_geometry = _kommune_geometry(_config.load_config(), criteria['kommuner'])
+            if kommune_geometry is None:
+                arcpy.AddError("None of the selected municipalities could be read.")
+                return
+        description = "ALARM: " + _filters.describe(criteria)
 
         # Get current map
         aprx = arcpy.mp.ArcGISProject("CURRENT")
@@ -984,7 +1180,7 @@ class FilterLayers(object):
 
             for layer in candidates:
                 if reset:
-                    layer.definitionQuery = ""
+                    _set_filter(layer, "")
                     arcpy.AddMessage(f"  Reset filter: {layer.name}")
                     layers_filtered += 1
                     continue
@@ -1008,15 +1204,27 @@ class FilterLayers(object):
                     arcpy.AddWarning(f"  {layer.name}: 'elev_med' is a text field. Load PRAs via 'Load ALARM Data' to get numeric fields - skipped")
                     continue
 
-                if not filter_query:
+                if not filter_query and kommune_geometry is None:
                     arcpy.AddWarning(f"  {layer.name}: no filter criteria apply to this layer type - skipped")
                     continue
 
                 previous_query = layer.definitionQuery or ""
+                previous_name = _filter_name(layer)
                 try:
+                    if kommune_geometry is not None:
+                        # spatial part: the features that lie at least partly in the municipalities
+                        inside = _layer_oids_inside(layer, kommune_geometry)
+                        arcpy.AddMessage(f"  {layer.name}: {len(inside)} features in "
+                                         f"{', '.join(_kommune.short_names(criteria['kommuner']))}")
+                        kommune_sql = _kommune.oid_condition(arcpy.Describe(layer).OIDFieldName, inside)
+                        filter_query = f"({kommune_sql}) AND ({filter_query})" if filter_query else kommune_sql
+
                     # Refine: keep the filter that is already on the layer and add the new one
+                    name = description
                     if refine:
                         filter_query = _filters.combine_refine(previous_query, filter_query)
+                        if previous_query:
+                            name = f"{previous_name or 'ALARM: earlier filter'} + {_filters.describe(criteria)}"
 
                     # Counting reads the whole layer, which is slow for big shapefiles on L:,
                     # so it is optional. The layer is used (not its dataSource path):
@@ -1033,10 +1241,11 @@ class FilterLayers(object):
                             layer.definitionQuery = previous_query
                             before = self._count(layer)
 
-                    layer.definitionQuery = filter_query
+                    _set_filter(layer, filter_query, name)
                     action = "Refined" if (refine and previous_query) else "Applied"
                     arcpy.AddMessage(f"  {action} filter on: {layer.name} ({layer_type})")
-                    arcpy.AddMessage(f"    Query: {filter_query}")
+                    arcpy.AddMessage(f"    Filter: {name}")
+                    arcpy.AddMessage(f"    Query: {_short_sql(filter_query)}")
 
                     if count_features:
                         matched = self._count(layer)
@@ -1051,7 +1260,7 @@ class FilterLayers(object):
                     # Counting changes the definition query temporarily; never leave the
                     # layer without its previous filter or with a broken one.
                     try:
-                        layer.definitionQuery = previous_query
+                        _set_filter(layer, previous_query, previous_name)
                     except Exception:
                         pass
                     arcpy.AddWarning(f"  Failed to apply filter to {layer.name}: {e}")
@@ -1276,7 +1485,16 @@ class GenerateReport(object):
         param2.filter.list = ["HTML", "CSV", "Both"]
         param2.value = "HTML"
 
-        return [param0, param1, param2]
+        # Parameter 3: interactive map in the HTML report
+        param3 = arcpy.Parameter(
+            displayName="Include map (HTML; needs internet when opened)",
+            name="include_map",
+            datatype="GPBoolean",
+            parameterType="Optional",
+            direction="Input")
+        param3.value = True
+
+        return [param0, param1, param2, param3]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -1295,6 +1513,7 @@ class GenerateReport(object):
         layer = parameters[0].value
         output_dir = parameters[1].valueAsText
         report_format = parameters[2].valueAsText
+        include_map = bool(parameters[3].value) if len(parameters) > 3 and parameters[3].value is not None else True
 
         arcpy.AddMessage(f"Analyzing layer: {layer.name}")
         definition_query = getattr(layer, 'definitionQuery', "") or ""
@@ -1305,10 +1524,13 @@ class GenerateReport(object):
             arcpy.AddWarning(f"{selected} features are selected in '{layer.name}' - the report only covers the "
                              f"selection. Clear the selection to report everything the filter shows.")
 
+        buildings = []
         try:
             # The cursor respects the layer's filter and selection
             with arcpy.da.SearchCursor(layer, _report.FIELDS) as cursor:
                 stats = _report.collect(cursor)
+            if include_map and report_format in ["HTML", "Both"]:
+                buildings = self._buildings_for_map(layer)
         except Exception as e:
             arcpy.AddError(f"Could not read {', '.join(_report.FIELDS)} from '{layer.name}' - "
                            f"is it a Risk Assessment layer? ({e})")
@@ -1319,19 +1541,50 @@ class GenerateReport(object):
             arcpy.AddWarning(f"{stats['elevation'][_report.UNKNOWN]} buildings have no elevation (listed as Unknown)")
 
         source = getattr(layer, 'dataSource', None)
-        context = _report.context_lines(layer.name, definition_query, selected, source)
+        context = _report.context_lines(layer.name, _short_sql(definition_query), selected, source,
+                                        description=_filter_name(layer) if definition_query else None)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layer.name}_{timestamp}")
 
         if report_format in ["HTML", "Both"]:
             html_path = os.path.join(output_dir, base + ".html")
-            _report.write_html(html_path, stats, context)
+            if include_map:
+                payload = _webmap.build_payload(buildings)
+                arcpy.AddMessage(f"Map: {len(buildings)} buildings in {len(payload['areas'])} affected areas")
+                _report.write_html(html_path, stats, context, map_html=_webmap.map_section(payload),
+                                   head_extra=_webmap.head_html())
+            else:
+                _report.write_html(html_path, stats, context)
             arcpy.AddMessage(f"HTML report: {html_path}")
         if report_format in ["CSV", "Both"]:
             csv_path = os.path.join(output_dir, base + ".csv")
             _report.write_csv(csv_path, stats, context)
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return
+
+    MAP_FIELDS = ["bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct"]
+
+    def _buildings_for_map(self, layer):
+        """Buildings as WGS84 position, outline and attributes (respects filter and selection)."""
+        names = {f.name.lower(): f.name for f in arcpy.ListFields(layer)}
+        present = [f for f in self.MAP_FIELDS if f in names]     # older results may lack some of them
+        fields = [names[f] for f in present]
+        buildings = []
+        with arcpy.da.SearchCursor(layer, ["SHAPE@"] + fields, spatial_reference=arcpy.SpatialReference(4326)) as cursor:
+            for row in cursor:
+                shape = row[0]
+                if shape is None:
+                    continue
+                centre = shape.centroid if shape.type != "point" else shape.firstPoint
+                try:
+                    geometry = shape.__geo_interface__ if shape.type == "polygon" else None
+                except Exception:
+                    geometry = None
+                props = {}
+                for name, value in zip(present, row[1:]):
+                    props[name] = round(value, 1) if isinstance(value, float) else value
+                buildings.append({'lon': centre.X, 'lat': centre.Y, 'geometry': geometry, 'props': props})
+        return buildings
 
 
 class CompareScenarios(object):
@@ -1358,6 +1611,7 @@ class CompareScenarios(object):
         regions = _data.completed_regions(cfg['results_base'])
         param0.filter.type = "ValueList"
         param0.filter.list = regions if regions else [NO_REGIONS]
+        municipalities = _municipality_param()
 
         scenario_list = [f"{k} - {v}" for k, v in cfg['scenarios'].items()]
         param1 = arcpy.Parameter(displayName="Scenarios to Compare", name="scenarios", datatype="GPString",
@@ -1411,8 +1665,8 @@ class CompareScenarios(object):
         param11.filter.list = ["HTML", "CSV", "Both"]
         param11.value = "HTML"
 
-        return [source, source_folder, param0, param1, param2, param3, param4, param5, param6, param7, param8,
-                param9, param10, param11]
+        return [source, source_folder, param0, municipalities, param1, param2, param3, param4, param5, param6,
+                param7, param8, param9, param10, param11]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -1421,8 +1675,13 @@ class CompareScenarios(object):
     def updateParameters(self, parameters):
         """Follow the chosen data source; enable the aspect parameters for the aspect filter type."""
         p = _by_name(parameters)
+        cfg = _config.load_config()
+        region_changed = _edited(p['source']) or _edited(p['source_folder']) or _edited(p['region'])
         _refresh_source_dependent(p['source'], p['source_folder'], p['region'], p['scenarios'],
-                                  _config.load_config(), multi_region=False, select_all_scenarios=True)
+                                  cfg, multi_region=False, select_all_scenarios=True)
+        if region_changed:
+            _, base = _selected_source(p['source'], p['source_folder'], cfg)
+            _update_municipality_list(p['municipalities'], _region_bbox(base, p['region'].valueAsText))
         if p['aspect_type'].value:
             aspect_type = p['aspect_type'].valueAsText
             p['cardinal_dirs'].enabled = aspect_type == _filters.ASPECT_CARDINAL
@@ -1455,6 +1714,18 @@ class CompareScenarios(object):
 
         descriptions = cfg['scenarios'] if source_name == _config.STANDARD_SOURCE \
             else _data.discover_scenarios(base, [region])
+        inside = None
+        if criteria['kommuner']:
+            geometry = _kommune_geometry(cfg, criteria['kommuner'])
+            if geometry is None:
+                arcpy.AddError("None of the selected municipalities could be read.")
+                return
+            names = ", ".join(_kommune.short_names(criteria['kommuner']))
+            arcpy.AddMessage(f"Counting only features in {names} (spatial selection, takes a while for large layers)")
+
+            def inside(shp):
+                return _oids_inside(str(_resolvable_shapefile(shp)), geometry)
+
         results = []
         for sid in scenario_ids:
             scenario_dir = _data.find_scenario_dir(base, region, sid)
@@ -1463,7 +1734,7 @@ class CompareScenarios(object):
                 continue
             arcpy.AddMessage(f"Scenario {sid}: reading {_data.scenario_dir_label(scenario_dir)}")
             results.append(_compare.compute_scenario(
-                sid, scenario_dir, criteria, label=descriptions.get(sid, sid), warn=arcpy.AddWarning))
+                sid, scenario_dir, criteria, label=descriptions.get(sid, sid), warn=arcpy.AddWarning, inside=inside))
 
         if not results:
             arcpy.AddError("No scenarios could be read.")
