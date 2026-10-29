@@ -56,8 +56,8 @@ def _selection_count(layer):
 # Parameter index of each filter criterion in the two tools that use the criteria
 _FILTER_PARAMS = dict(any=0, elev_min=1, elev_max=2, aspect_type=3, cardinal=4, aspect_min=5, aspect_max=6,
                       saf_classes=7, min_max_ppr=8)
-_COMPARE_PARAMS = dict(elev_min=2, elev_max=3, aspect_type=4, cardinal=5, aspect_min=6, aspect_max=7,
-                       saf_classes=8, min_max_ppr=9)
+_COMPARE_PARAMS = dict(elev_min=4, elev_max=5, aspect_type=6, cardinal=7, aspect_min=8, aspect_max=9,
+                       saf_classes=10, min_max_ppr=11)
 
 
 def _criteria_from(parameters, index):
@@ -87,10 +87,111 @@ def _show_validation(parameters, index, require_any=False):
             param.setWarningMessage(message)
 
 
-def _check_region(param):
-    """The region list shows 'No regions found' when the results folder is not reachable."""
-    if param.valueAsText == "No regions found":
-        param.setErrorMessage("No regions found - is the results folder (L:) reachable? See alarm_core/config.py.")
+OTHER_FOLDER = "Other folder..."
+NO_REGIONS = "No regions found"
+SELECT_REGIONS_FIRST = "Select regions first"
+
+
+def _by_name(parameters):
+    """The tool parameters by name (the order changes more easily than the names)."""
+    return {param.name: param for param in parameters}
+
+
+def _source_label(name, folder):
+    return f"{name}  ({folder})"
+
+
+def _make_source_params(cfg):
+    """The 'Data Source' choice and the folder for 'Other folder...' (first two dialog parameters)."""
+    labels = [_source_label(name, folder) for name, folder in cfg['sources'].items()]
+    source = arcpy.Parameter(displayName="Data Source", name="source", datatype="GPString",
+                             parameterType="Required", direction="Input")
+    source.filter.type = "ValueList"
+    source.filter.list = labels + [OTHER_FOLDER]
+    source.value = labels[0]
+
+    folder = arcpy.Parameter(displayName="Data Folder (for 'Other folder...')", name="source_folder",
+                             datatype="DEFolder", parameterType="Optional", direction="Input")
+    folder.enabled = False
+    return source, folder
+
+
+def _selected_source(source, folder, cfg):
+    """(name, base folder) of the chosen data source; the folder is None if it is not set yet."""
+    text = source.valueAsText or ""
+    if text == OTHER_FOLDER:
+        chosen = folder.valueAsText
+        return OTHER_FOLDER, (Path(chosen) if chosen else None)
+    for name, path in cfg['sources'].items():
+        if text == _source_label(name, path):
+            return name, Path(path)
+    return _config.STANDARD_SOURCE, Path(cfg['results_base'])
+
+
+def _source_tag(name, base):
+    """Short tag for names of layers / groups of a non-standard source ('' for the standard results).
+
+    A chosen folder is tagged with its own name, so two different folders do not share layer
+    or cache names.
+    """
+    if name == _config.STANDARD_SOURCE:
+        return ""
+    label = base.name if name == OTHER_FOLDER and base is not None else name
+    return re.sub(r"[^0-9A-Za-z_]", "_", label)
+
+
+def _edited(param):
+    """True if the user changed the parameter since the last validation."""
+    return bool(param.altered and not param.hasBeenValidated)
+
+
+def _scenario_options(name, base, regions, cfg):
+    """Scenario choices ('A - description') for the chosen source and regions."""
+    if name == _config.STANDARD_SOURCE:
+        return [f"{k} - {v}" for k, v in cfg['scenarios'].items()]
+    found = _data.discover_scenarios(base, regions) if base and regions else {}
+    return [f"{k} - {v}" for k, v in found.items()] or [SELECT_REGIONS_FIRST]
+
+
+def _refresh_source_dependent(source, folder, region, scenarios, cfg, multi_region, select_all_scenarios=False):
+    """Keep the region and scenario lists in step with the chosen data source (updateParameters)."""
+    folder.enabled = source.valueAsText == OTHER_FOLDER
+    source_changed = _edited(source) or _edited(folder)
+    regions_changed = _edited(region)
+    if not (source_changed or regions_changed):
+        return
+
+    name, base = _selected_source(source, folder, cfg)
+    if source_changed:
+        found = _data.completed_regions(base) if base and base.is_dir() else []
+        region.filter.list = found if found else [NO_REGIONS]
+        keep = [r for r in _split_values(region.valueAsText) if r in found]
+        region.value = (keep or None) if multi_region else (keep[0] if keep else None)
+
+    options = _scenario_options(name, base, _split_values(region.valueAsText), cfg)
+    scenarios.filter.list = options
+    keep_ids = {o.split(' - ')[0] for o in options}
+    kept = [v for v in _split_values(scenarios.valueAsText) if v.split(' - ')[0] in keep_ids]
+    if not kept and select_all_scenarios and options != [SELECT_REGIONS_FIRST]:
+        kept = options
+    # the saved text may carry an older description; use the current one
+    by_id = {o.split(' - ')[0]: o for o in options}
+    scenarios.value = [by_id[v.split(' - ')[0]] for v in kept] or None
+
+
+def _check_source(source, folder, region, scenarios, cfg):
+    """Errors for an unreachable data source or empty choices (updateMessages)."""
+    name, base = _selected_source(source, folder, cfg)
+    if source.valueAsText == OTHER_FOLDER:
+        if base is None:
+            folder.setErrorMessage("Choose the data folder (the one that contains the region folders).")
+        elif not base.is_dir():
+            folder.setErrorMessage(f"Folder not found: {base}")
+    if region.valueAsText == NO_REGIONS:
+        region.setErrorMessage(f"No regions found in {base if base else 'the data source'} - is the folder reachable "
+                               f"(L: connected) and does it contain <region>/merged? See alarm_core/config.py.")
+    if scenarios.valueAsText and SELECT_REGIONS_FIRST in scenarios.valueAsText:
+        scenarios.setErrorMessage("Select the regions first; the scenarios are read from their folders.")
 
 
 def _split_values(text):
@@ -125,11 +226,15 @@ class LoadALARMData(object):
         self.results_base = cfg['results_base']
         self.optimized_base = cfg['optimized_base']
         self.scenarios = cfg['scenarios']
+        self.source_tag = ""  # '' = standard results; otherwise names layers and groups of other sources
 
     def getParameterInfo(self):
         """Define parameter definitions"""
 
-        # Parameter 0: Region
+        cfg = _config.load_config()
+        source, source_folder = _make_source_params(cfg)
+
+        # Parameter: Regions
         param0 = arcpy.Parameter(
             displayName="Regions",
             name="region",
@@ -155,7 +260,7 @@ class LoadALARMData(object):
         param1.filter.type = "ValueList"
         param1.filter.list = [f"{k} - {v}" for k, v in self.scenarios.items()]
 
-        # Parameter 2: Data types to load
+        # Parameter: Data types to load
         param2 = arcpy.Parameter(
             displayName="Data to Load",
             name="data_types",
@@ -178,29 +283,45 @@ class LoadALARMData(object):
 
         param3.value = True
 
-        return [param0, param1, param2, param3]
+        return [source, source_folder, param0, param1, param2, param3]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed."""
+        """Follow the chosen data source: its regions, and the scenarios found in them."""
+        p = _by_name(parameters)
+        _refresh_source_dependent(p['source'], p['source_folder'], p['region'], p['scenario'],
+                                  _config.load_config(), multi_region=True)
         return
 
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
         parameter."""
-        _check_region(parameters[0])
+        p = _by_name(parameters)
+        _check_source(p['source'], p['source_folder'], p['region'], p['scenario'], _config.load_config())
         return
 
     def execute(self, parameters, messages):
         """Load every selected region/scenario combination into the active map."""
-        regions = _split_values(parameters[0].valueAsText)
-        scenario_ids = [v.split(' - ')[0] for v in _split_values(parameters[1].valueAsText)]
-        data_types = _split_values(parameters[2].valueAsText)
-        use_group = parameters[3].value
+        p = _by_name(parameters)
+        cfg = _config.load_config()
+        source_name, base = _selected_source(p['source'], p['source_folder'], cfg)
+        if base is None or not base.is_dir():
+            arcpy.AddError(f"Data folder not found: {base}")
+            return
+        # All lookups of this run use the chosen data folder. Optimized copies belong to the
+        # standard results only.
+        self.results_base = base
+        self.optimized_base = cfg['optimized_base'] if source_name == _config.STANDARD_SOURCE else None
+        self.source_tag = _source_tag(source_name, base)
+        arcpy.AddMessage(f"Data source: {source_name} ({base})")
+
+        regions = _split_values(p['region'].valueAsText)
+        scenario_ids = [v.split(' - ')[0] for v in _split_values(p['scenario'].valueAsText)]
+        data_types = _split_values(p['data_types'].valueAsText)
+        use_group = p['use_group'].value
 
         aprx = arcpy.mp.ArcGISProject("CURRENT")
         map_obj = aprx.activeMap
@@ -299,6 +420,8 @@ class LoadALARMData(object):
             if pra_file:
                 arcpy.AddMessage(f"Loading PRAs: {pra_file.name}")
                 base_name = re.sub(r"[^0-9A-Za-z_]", "_", f"pra_{region}_{scenario_id}")
+                if self.source_tag:
+                    base_name += f"_s_{self.source_tag}"        # a second data source must not share the cache
                 pra_copy = self._optimized(pra_file)
 
                 if pra_copy is not None:
@@ -338,7 +461,7 @@ class LoadALARMData(object):
         if "Risk Assessment" in data_types:
             risk_dir = scenario_dir / "risk_assessment"
             if risk_dir.exists():
-                risk_file = self._find_file(risk_dir, "risk_*.shp")
+                risk_file = _data.find_risk_file(risk_dir, warn=arcpy.AddWarning)
                 risk_copy = self._optimized(risk_file)
                 if risk_file and self._already_loaded(map_obj, risk_file, risk_copy):
                     pass
@@ -355,6 +478,8 @@ class LoadALARMData(object):
         # Move layers to group if requested
         if use_group and layers_added:
             group_name = f"{region} - Scenario {scenario_id}"
+            if self.source_tag:
+                group_name += f" [{self.source_tag}]"
             arcpy.AddMessage(f"Organizing layers in group: {group_name}")
             try:
                 # Check if group already exists
@@ -1226,12 +1351,13 @@ class CompareScenarios(object):
     def getParameterInfo(self):
         """Define parameter definitions"""
         cfg = _config.load_config()
+        source, source_folder = _make_source_params(cfg)
 
         param0 = arcpy.Parameter(displayName="Region", name="region", datatype="GPString",
                                  parameterType="Required", direction="Input")
         regions = _data.completed_regions(cfg['results_base'])
         param0.filter.type = "ValueList"
-        param0.filter.list = regions if regions else ["No regions found"]
+        param0.filter.list = regions if regions else [NO_REGIONS]
 
         scenario_list = [f"{k} - {v}" for k, v in cfg['scenarios'].items()]
         param1 = arcpy.Parameter(displayName="Scenarios to Compare", name="scenarios", datatype="GPString",
@@ -1285,45 +1411,59 @@ class CompareScenarios(object):
         param11.filter.list = ["HTML", "CSV", "Both"]
         param11.value = "HTML"
 
-        return [param0, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11]
+        return [source, source_folder, param0, param1, param2, param3, param4, param5, param6, param7, param8,
+                param9, param10, param11]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
 
     def updateParameters(self, parameters):
-        """Enable/disable the aspect parameters depending on the aspect filter type."""
-        if parameters[4].value:
-            aspect_type = parameters[4].valueAsText
-            parameters[5].enabled = aspect_type == _filters.ASPECT_CARDINAL
-            parameters[6].enabled = aspect_type == _filters.ASPECT_DEGREES
-            parameters[7].enabled = aspect_type == _filters.ASPECT_DEGREES
+        """Follow the chosen data source; enable the aspect parameters for the aspect filter type."""
+        p = _by_name(parameters)
+        _refresh_source_dependent(p['source'], p['source_folder'], p['region'], p['scenarios'],
+                                  _config.load_config(), multi_region=False, select_all_scenarios=True)
+        if p['aspect_type'].value:
+            aspect_type = p['aspect_type'].valueAsText
+            p['cardinal_dirs'].enabled = aspect_type == _filters.ASPECT_CARDINAL
+            p['aspect_min'].enabled = aspect_type == _filters.ASPECT_DEGREES
+            p['aspect_max'].enabled = aspect_type == _filters.ASPECT_DEGREES
         return
 
     def updateMessages(self, parameters):
-        """Check region and criteria before the tool runs."""
-        _check_region(parameters[0])
+        """Check data source, region and criteria before the tool runs."""
+        p = _by_name(parameters)
+        _check_source(p['source'], p['source_folder'], p['region'], p['scenarios'], _config.load_config())
         _show_validation(parameters, _COMPARE_PARAMS)
         return
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
-        region = parameters[0].valueAsText
-        scenario_ids = [v.split(' - ')[0] for v in _split_values(parameters[1].valueAsText)]
-        criteria = _criteria_from(parameters, _COMPARE_PARAMS)
-        output_dir = parameters[10].valueAsText
-        report_format = parameters[11].valueAsText
-
+        p = _by_name(parameters)
         cfg = _config.load_config()
+        source_name, base = _selected_source(p['source'], p['source_folder'], cfg)
+        if base is None or not base.is_dir():
+            arcpy.AddError(f"Data folder not found: {base}")
+            return
+        arcpy.AddMessage(f"Data source: {source_name} ({base})")
+
+        region = p['region'].valueAsText
+        scenario_ids = [v.split(' - ')[0] for v in _split_values(p['scenarios'].valueAsText)]
+        criteria = _criteria_from(parameters, _COMPARE_PARAMS)
+        output_dir = p['output_dir'].valueAsText
+        report_format = p['report_format'].valueAsText
+
+        descriptions = cfg['scenarios'] if source_name == _config.STANDARD_SOURCE \
+            else _data.discover_scenarios(base, [region])
         results = []
         for sid in scenario_ids:
-            scenario_dir = _data.find_scenario_dir(cfg['results_base'], region, sid)
+            scenario_dir = _data.find_scenario_dir(base, region, sid)
             if not scenario_dir:
                 arcpy.AddWarning(f"Scenario {sid}: no data found for {region} - skipped")
                 continue
-            arcpy.AddMessage(f"Scenario {sid}: reading {scenario_dir.name}")
+            arcpy.AddMessage(f"Scenario {sid}: reading {_data.scenario_dir_label(scenario_dir)}")
             results.append(_compare.compute_scenario(
-                sid, scenario_dir, criteria, label=cfg['scenarios'].get(sid, sid), warn=arcpy.AddWarning))
+                sid, scenario_dir, criteria, label=descriptions.get(sid, sid), warn=arcpy.AddWarning))
 
         if not results:
             arcpy.AddError("No scenarios could be read.")
@@ -1335,13 +1475,13 @@ class CompareScenarios(object):
             arcpy.AddMessage(line)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = re.sub(r"[^0-9A-Za-z_]", "_", f"compare_{region}_{timestamp}")
+        file_base = re.sub(r"[^0-9A-Za-z_]", "_", f"compare_{region}_{timestamp}")
         if report_format in ("HTML", "Both"):
-            html_path = os.path.join(output_dir, base + ".html")
-            _compare.write_html(html_path, region, results, rows, criteria)
+            html_path = os.path.join(output_dir, file_base + ".html")
+            _compare.write_html(html_path, region, results, rows, criteria, source=f"{source_name}: {base}")
             arcpy.AddMessage(f"HTML report: {html_path}")
         if report_format in ("CSV", "Both"):
-            csv_path = os.path.join(output_dir, base + ".csv")
+            csv_path = os.path.join(output_dir, file_base + ".csv")
             _compare.write_csv(csv_path, results, rows)
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return

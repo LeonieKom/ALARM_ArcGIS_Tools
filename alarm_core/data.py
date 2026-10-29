@@ -33,6 +33,18 @@ def completed_regions(results_base):
     return sorted(regions)
 
 
+def find_risk_file(risk_dir, warn=None):
+    """The risk assessment shapefile in a scenario's risk_assessment folder, or None.
+
+    'risk_<region>...' in a campaign run; a single-scenario run writes it as
+    'risk_assessment_<region>...' (the same prefix as the .csv/.xlsx next to it).
+    """
+    found = find_file(risk_dir, "risk_*.shp", warn=warn)
+    if found:
+        return found
+    return find_file(risk_dir, "risk_assessment_*.shp", warn=warn, allow_excluded=True)
+
+
 # A run of a single scenario (pipeline "quick settings") writes its files directly into
 # <region>/merged/ instead of one folder per scenario, e.g. 'tracks_1_Lyngen_A_80-60_prox0_rel1_2m.shp'
 # (with scenario id) or 'tracks_1_Lyngen_80-60_prox0_rel1_2m.shp' (without). Such a folder is
@@ -131,16 +143,22 @@ def is_ignored(name):
     return any(marker in lower for marker in IGNORED_MARKERS)
 
 
-def find_file(directory, pattern, warn=None):
+def find_file(directory, pattern, warn=None, allow_excluded=False):
     """The result file in directory matching a glob pattern, or None.
 
-    Backup copies and other result types with the same prefix are skipped (see above).
-    If several files remain, the first one (by name) is used and warn() is told about it.
+    Backup copies and other result types with the same prefix are skipped (see above;
+    allow_excluded=True switches the second kind off). Of a raster and its '_clipped' variant
+    (cut to the region polygon, written next to it) the full one is used. If several files
+    still remain, the first one (by name) is used and warn() is told about it.
     """
     lower_pattern = pattern.lower()
-    excluded = next((v for k, v in EXCLUDED_PREFIXES.items() if lower_pattern.startswith(k)), ())
+    excluded = () if allow_excluded else next(
+        (v for k, v in EXCLUDED_PREFIXES.items() if lower_pattern.startswith(k)), ())
     files = [p for p in sorted(Path(directory).glob(pattern))
              if not is_ignored(p.name) and not p.name.lower().startswith(excluded)]
+    full = [p for p in files if not p.stem.lower().endswith("_clipped")]
+    if full:
+        files = full
     if len(files) > 1 and warn:
         warn(f"  Several files match {pattern} in {Path(directory).name}: using {files[0].name} "
              f"(also: {', '.join(p.name for p in files[1:])})")

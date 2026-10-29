@@ -8,7 +8,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from .data import find_file
+from .data import find_file, find_risk_file, scenario_dir_label
 from .dbf import read_dbf_columns, to_number
 from .filters import TRACK_MEMBER_FIELDS, criteria_notes, matches_numeric, matches_risk, matches_track
 
@@ -30,7 +30,7 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
     """
     warn = warn or (lambda message: None)
     scenario_dir = Path(scenario_dir)
-    out = {'id': scenario_id, 'label': label or scenario_id, 'dir': scenario_dir.name}
+    out = {'id': scenario_id, 'label': label or scenario_id, 'dir': scenario_dir_label(scenario_dir)}
 
     # Tracks and PRAs: elevation and aspect
     for key, pattern, elev_field, aspect_field in NUMERIC_LAYERS:
@@ -59,7 +59,7 @@ def compute_scenario(scenario_id, scenario_dir, criteria, label=None, warn=None)
 
     # Risk assessment: buildings
     risk_dir = scenario_dir / "risk_assessment"
-    risk_shp = find_file(risk_dir, "risk_*.shp", warn=warn) if risk_dir.exists() else None
+    risk_shp = find_risk_file(risk_dir, warn=warn) if risk_dir.exists() else None
     if not risk_shp:
         out['risk'] = None
         warn(f"  Scenario {scenario_id}: risk assessment not found")
@@ -141,7 +141,7 @@ def write_csv(path, results, rows):
             writer.writerow([label] + ([""] * len(results) if kind == "section" else values))
 
 
-def write_html(path, region, results, rows, criteria, generated=None):
+def write_html(path, region, results, rows, criteria, generated=None, source=None):
     head = "".join(f"<th>{escape(r['id'])}<br><small>{escape(r['label'])}</small></th>" for r in results)
     body = []
     for kind, label, values in rows:
@@ -152,6 +152,7 @@ def write_html(path, region, results, rows, criteria, generated=None):
             body.append(f"<tr><td>{escape(label)}</td>{cells}</tr>")
     note_items = "".join(f"<li>{escape(n)}</li>" for n in criteria_notes(criteria))
     generated = generated or datetime.now()
+    source_line = f"<p>Data: {escape(str(source))}</p>" if source else ""
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -172,6 +173,7 @@ def write_html(path, region, results, rows, criteria, generated=None):
 <body>
     <h1>Scenario comparison: {escape(region)}</h1>
     <p>Generated: {generated.strftime("%Y-%m-%d %H:%M:%S")}</p>
+    {source_line}
     <div class="filter"><strong>Filter applied to every scenario</strong><ul>{note_items}</ul></div>
     <table>
         <tr><th>Metric</th>{head}</tr>

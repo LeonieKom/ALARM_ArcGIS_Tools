@@ -52,6 +52,8 @@ def test_scenarios_do_not_leak_between_calls(tmp_path):
 def test_example_config_matches_defaults():
     example = json.loads((Path(__file__).resolve().parent.parent / "alarm_tools_config.example.json").read_text())
     assert example['scenarios'] == config.DEFAULT_SCENARIOS
+    assert {k: Path(v) for k, v in example['sources'].items()} == {
+        k: Path(v) for k, v in config.DEFAULT_EXTRA_SOURCES.items()}
     assert example['results_base'] == config.DEFAULT_RESULTS_BASE
     assert example['optimized_base'] == config.DEFAULT_RESULTS_BASE + "_optimized"
 
@@ -250,9 +252,11 @@ def make_flat(base, region="1_Lyngen", scenario_id="A", params="80-60_prox0_rel1
     (merged / "risk_assessment").mkdir(parents=True)
     stem = f"{scenario_id}_{params}" if scenario_id else params
     for name in (f"tracks_{region}_{stem}.shp", f"pra_{region}_{stem}.shp", f"ppr_{region}_{stem}_max.tif",
-                 f"pra_binary_{region}.shp", *extra):
+                 f"ppr_{region}_{stem}_max_clipped.tif", f"pra_binary_{region}.shp", *extra):
         (merged / name).touch()
-    (merged / "risk_assessment" / f"risk_{region}_{stem}.shp").touch()
+    # a single-scenario run names the risk shapefile like its .csv/.xlsx (found on L:\ALARM\ALARM2.2)
+    (merged / "risk_assessment" / f"risk_assessment_{region}_{stem}.shp").touch()
+    (merged / "risk_assessment" / f"risk_assessment_{region}_{stem}.csv").touch()
     return merged
 
 
@@ -325,4 +329,29 @@ def test_find_file_works_in_a_flat_folder(tmp_path):
     merged = make_flat(tmp_path, scenario_id="A")
     assert data.find_file(merged, "tracks_*.shp").name.startswith("tracks_1_Lyngen_A_")
     assert data.find_file(merged, "pra_*.shp").name.startswith("pra_1_Lyngen_A_")          # not pra_binary
-    assert data.find_file(merged / "risk_assessment", "risk_*.shp").name.startswith("risk_1_Lyngen_A_")
+    assert data.find_risk_file(merged / "risk_assessment").name == "risk_assessment_1_Lyngen_A_80-60_prox0_rel1_2m.shp"
+
+
+def test_risk_file_of_a_campaign_run_wins_over_the_single_run_name(tmp_path):
+    for name in ("risk_R_A_x.shp", "risk_assessment_R_A_x.shp"):
+        (tmp_path / name).touch()
+    assert data.find_risk_file(tmp_path).name == "risk_R_A_x.shp"
+
+
+def test_risk_file_missing(tmp_path):
+    (tmp_path / "risk_assessment_R_A_x.csv").touch()            # only the table, no shapefile
+    (tmp_path / "risk_R_A_x.backup.shp").touch()
+    assert data.find_risk_file(tmp_path) is None
+
+
+def test_the_clipped_variant_of_a_raster_is_not_chosen_and_not_reported(tmp_path):
+    for name in ("ppr_R_x_max.tif", "ppr_R_x_max_clipped.tif"):
+        (tmp_path / name).touch()
+    warnings = []
+    assert data.find_file(tmp_path, "ppr_*.tif", warn=warnings.append).name == "ppr_R_x_max.tif"
+    assert warnings == []
+
+
+def test_a_clipped_raster_alone_is_still_found(tmp_path):
+    (tmp_path / "ppr_R_x_max_clipped.tif").touch()
+    assert data.find_file(tmp_path, "ppr_*.tif").name == "ppr_R_x_max_clipped.tif"

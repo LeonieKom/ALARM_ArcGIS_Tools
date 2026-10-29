@@ -13,10 +13,7 @@ repository), the layers are loaded from them. Run the tests a second time with
 ALARM_OPTIMIZED_BASE set to an empty value to cover loading from the originals too.
 """
 
-import importlib.machinery
-import importlib.util
 import os
-import shutil
 from pathlib import Path
 
 import pytest
@@ -24,6 +21,8 @@ import pytest
 arcpy = pytest.importorskip("arcpy")
 
 from alarm_core import compare, config, data, filters as f   # noqa: E402
+from arcpy_helpers import (COMPARE_NAMES, P, compare_params, env_context, load_params,   # noqa: E402,F401
+                           std_source, ProjectProxy)
 
 ROOT = Path(__file__).resolve().parent.parent
 REGION = os.environ.get("ALARM_TEST_REGION", "02_Vest_Finnmark")
@@ -45,60 +44,9 @@ pytestmark = [
 ]
 
 
-class P:
-    """Stand-in for an arcpy tool parameter."""
-
-    def __init__(self, value=None):
-        self.value = value
-        self.enabled = True
-        self.error = self.warning = None
-
-    def setErrorMessage(self, message):
-        self.error = message
-
-    def setWarningMessage(self, message):
-        self.warning = message
-
-    @property
-    def valueAsText(self):
-        if self.value is None:
-            return None
-        if isinstance(self.value, (list, tuple)):
-            return ";".join(str(x) for x in self.value)
-        return str(self.value)
-
-
-class ProjectProxy:
-    """What ArcGISProject('CURRENT') returns inside a tool: our map, our scratch geodatabase."""
-
-    def __init__(self, raw, map_obj, gdb):
-        self._raw, self.activeMap, self.activeView, self.defaultGeodatabase = raw, map_obj, None, gdb
-
-    def __getattr__(self, name):
-        return getattr(self._raw, name)
-
-
 @pytest.fixture(scope="module")
 def env(tmp_path_factory):
-    work = tmp_path_factory.mktemp("arcpy_it")
-    aprx_copy = work / "test.aprx"
-    shutil.copy(APRX, aprx_copy)
-    arcpy.management.CreateFileGDB(str(work), "scratch.gdb")
-    gdb = str(work / "scratch.gdb")
-
-    loader = importlib.machinery.SourceFileLoader("alarm_tools_under_test", str(ROOT / "ALARM_Tools.pyt"))
-    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
-    loader.exec_module(mod)
-
-    real = arcpy.mp.ArcGISProject
-    raw = real(str(aprx_copy))
-    m = raw.listMaps()[0]
-    proxy = ProjectProxy(raw, m, gdb)
-    arcpy.mp.ArcGISProject = lambda p: proxy if p == "CURRENT" else real(p)
-    try:
-        yield type("Env", (), {"mod": mod, "map": m, "gdb": gdb, "work": work})
-    finally:
-        arcpy.mp.ArcGISProject = real
+    yield from env_context(tmp_path_factory, APRX)
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +54,7 @@ def loaded(env):
     """Load tracks, PRAs and risk assessment once (the PRA conversion is slow)."""
     before_sbn = {p.name for p in _sdir.glob("*.sb[nx]")}
     t0 = __import__("time").time()
-    env.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["Tracks", "PRAs", "Risk Assessment"]), P(True)], None)
+    env.mod.LoadALARMData().execute(load_params(REGION, f"{SCEN} - x", ["Tracks", "PRAs", "Risk Assessment"], True), None)
     env.first_load_seconds = __import__("time").time() - t0
     env.sbn_before = before_sbn
     layers = {l.name: l for l in env.map.listLayers() if l.isFeatureLayer}
@@ -176,7 +124,7 @@ def test_second_load_uses_the_cache(loaded):
     import time
     arcpy.env.workspace = loaded.gdb
     t0 = time.time()
-    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["PRAs"]), P(False)], None)
+    loaded.mod.LoadALARMData().execute(load_params(REGION, f"{SCEN} - x", ["PRAs"], False), None)
     cached_seconds = time.time() - t0
     assert len(arcpy.ListFeatureClasses("pra_*")) == 1            # no second conversion
     assert cached_seconds < max(10, loaded.first_load_seconds / 3)
@@ -185,7 +133,7 @@ def test_second_load_uses_the_cache(loaded):
 def test_loading_the_same_scenario_again_adds_nothing(loaded, capfd):
     before = sorted(l.longName for l in loaded.map.listLayers())
     capfd.readouterr()
-    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["Tracks", "PRAs", "Risk Assessment"]), P(True)], None)
+    loaded.mod.LoadALARMData().execute(load_params(REGION, f"{SCEN} - x", ["Tracks", "PRAs", "Risk Assessment"], True), None)
     assert sorted(l.longName for l in loaded.map.listLayers()) == before
     assert "".join(capfd.readouterr()).count("Already in the map") == 3
 
@@ -197,7 +145,7 @@ def test_several_regions_and_scenarios_load_in_one_run(env, capfd):
         pytest.skip("regions 03_Nord_Troms / 04_Lyngen with scenarios A and B not available")
     capfd.readouterr()
     env.mod.LoadALARMData().execute(
-        [P(regions), P(["A - x", "B - x", "Z - not a scenario"]), P(["Tracks"]), P(True)], None)
+        load_params(regions, ["A - x", "B - x", "Z - not a scenario"], ["Tracks"], True), None)
     out = "".join(capfd.readouterr())
     groups = sorted(l.name for l in env.map.listLayers() if l.isGroupLayer)
     for r in regions:
@@ -229,7 +177,7 @@ def test_layers_come_from_the_optimized_copies(loaded):
 
 @needs_copies
 def test_ppr_from_the_optimized_copy_uses_the_pipeline_lyrx(loaded):
-    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["PPR Raster"]), P(False)], None)
+    loaded.mod.LoadALARMData().execute(load_params(REGION, f"{SCEN} - x", ["PPR Raster"], False), None)
     ppr = next(l for l in loaded.map.listLayers() if l.isRasterLayer and l.name.startswith("ppr_"))
     assert os.path.normcase(ppr.dataSource).startswith(os.path.normcase(str(_cfg['optimized_base'])))
     assert len(ppr.symbology.colorizer.classBreaks) > 1
@@ -248,7 +196,7 @@ def test_layer_types_are_detected_by_fields(loaded):
 
 
 def test_pfv_and_pft_rasters_use_the_pipeline_lyrx(loaded):
-    loaded.mod.LoadALARMData().execute([P(REGION), P(f"{SCEN} - x"), P(["PFV Raster", "PFT Raster"]), P(False)], None)
+    loaded.mod.LoadALARMData().execute(load_params(REGION, f"{SCEN} - x", ["PFV Raster", "PFT Raster"], False), None)
     rasters = {l.name: l for l in loaded.map.listLayers() if l.isRasterLayer}
     pfv = next(l for n, l in rasters.items() if n.startswith("pfv_"))
     assert [b.label for b in pfv.symbology.colorizer.classBreaks][0] == "< 1 m/s"
@@ -381,12 +329,12 @@ def test_filter_dialog_shows_problems_at_the_right_parameter(env):
 
 def test_compare_dialog_checks_region_and_degree_range(env, tmp_path):
     tool = env.mod.CompareScenarios()
-    params = [P("No regions found"), P(["D - x"]), P(None), P(None), P(f.ASPECT_DEGREES), P(None), P(10), P(None),
-              P(None), P(None), P(str(tmp_path)), P("HTML")]
+    params = compare_params("No regions found", ["D - x"], aspect=f.ASPECT_DEGREES, amin=10, out=str(tmp_path))
     tool.updateMessages(params)
-    assert params[0].error and "No regions found" in params[0].error
-    assert params[7].error == "Required for a degree range."
-    assert params[6].error is None
+    by = {p.name: p for p in params}
+    assert by["region"].error and "No regions found" in by["region"].error
+    assert by["aspect_max"].error == "Required for a degree range."
+    assert by["aspect_min"].error is None
 
 
 def test_unknown_layer_name_only_warns(loaded):
@@ -439,8 +387,7 @@ def test_export_respects_the_filter_and_sanitizes_the_name(loaded, tmp_path):
 
 def test_compare_tool_writes_the_tables(loaded, tmp_path):
     tool = loaded.mod.CompareScenarios()
-    assert len(tool.getParameterInfo()) == 12
-    scenarios = [f"{SCEN} - x"]
-    tool.execute([P(REGION), P(scenarios), P(100), P(900), P(f.ASPECT_CARDINAL), P(["N", "NE"]), P(None), P(None),
-                  P(["S2", "S3"]), P(None), P(str(tmp_path)), P("Both")], None)
+    assert [p.name for p in tool.getParameterInfo()] == COMPARE_NAMES
+    tool.execute(compare_params(REGION, [f"{SCEN} - x"], emin=100, emax=900, aspect=f.ASPECT_CARDINAL,
+                                cardinal=["N", "NE"], saf=["S2", "S3"], out=str(tmp_path), fmt="Both"), None)
     assert len(list(tmp_path.glob("compare_*.html"))) == 1 and len(list(tmp_path.glob("compare_*.csv"))) == 1
