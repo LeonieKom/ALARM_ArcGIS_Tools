@@ -1,6 +1,7 @@
 {
     "results_base": "L:\\ALARM\\Results",
     "optimized_base": "L:\\ALARM\\Results_optimized",
+    "kommune_gdb": "L:\\ALARM\\BaseData\\Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb",
     "sources": {
         "ALARM2.2": "L:\\ALARM\\ALARM2.2"
     },

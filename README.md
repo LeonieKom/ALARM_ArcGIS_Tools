@@ -79,6 +79,7 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
 
 **Parameters:**
 - **Layers to Filter**: Pick one or more layers from the map (type is detected from the fields: Tracks, PRAs, Risk Assessment)
+- **Municipalities (Kommuner)**: tick one or several municipalities, e.g. *Tromsø (5501)*. The list shows the municipalities that the chosen layers touch. A track, PRA or building counts as "in" a municipality when it lies at least partly inside. Combines with all other criteria and with refining; Export and Report take it over automatically
 - **Elevation**: Min/Max range (meters)
 - **Aspect Filter Type**: None, Cardinal Directions, or Degree Range
   - **Cardinal Directions**: Multi-select (N, NE, E, SE, S, SW, W, NW)
@@ -96,6 +97,8 @@ Apply advanced filters to loaded layers based on elevation, aspect, safety class
   - *Replace existing filter*: the old filter is discarded
   - *Reset filter*: removes the filter from the selected layers
 - With refinement the messages show total / before / now feature counts
+- Every filter gets a readable name (e.g. `ALARM: Kommune Tromsø; >= 300 m; N/NE`), shown in *Layer Properties > Definition Query* and in the report. A municipality filter is stored as a list of object IDs (ranges where possible), so the SQL itself is long
+- The first time a municipality is used, its boundary is read from `L:\ALARM\BaseData\Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb` and kept in `%LOCALAPPDATA%\ALARM_Tools\kommuner\` (until the dataset changes). Finding the features inside takes a few seconds per large layer
 - **Show feature counts** can be switched off: counting reads each layer completely and takes seconds per large layer on `L:` (about 16 s for three Vest_Finnmark layers vs. 0.2 s without)
 - Aspect on Risk Assessment works with Cardinal Directions (matched against `pra_aspct`); a degree range is not available there
 - Shows applied query and feature counts (before -> after) in messages
@@ -119,6 +122,7 @@ Generate detailed statistics report for Risk Assessment layer.
 - **Risk Assessment Layer**: Select from current map
 - **Output Directory**: Where to save the report
 - **Report Format**: HTML, CSV, or Both
+- **Include map**: an interactive map in the HTML report (default: yes)
 
 **What it does:**
 - Analyzes all features (or filtered subset)
@@ -129,7 +133,8 @@ Generate detailed statistics report for Risk Assessment layer.
   - Distribution by Elevation ranges (<500m, 500-1000m, 1000-1500m, 1500-2000m, >2000m)
   - Distribution by Aspect (N, NE, E, SE, S, SW, W, NW)
   - Min/Max/Average PPR values
-- Creates formatted HTML report with tables and percentages
+- Creates formatted HTML report with tables and percentages; it names the layer, its filter (readable name and SQL) and a selection, if any
+- **Map** (HTML): all buildings of the report on a Kartverket background map (OpenStreetMap as alternative), coloured by max PPR like the layer; click a building for its values. Buildings closer than 500 m to each other form an *affected area*: a table lists the areas (buildings, highest max PPR, safety classes) with a *Zoom* button, and the largest 12 areas get their own small map. All maps can be zoomed and moved. Opening the report needs internet access for the map (Leaflet and the background tiles); the tables work without it
 - Optional CSV export for further analysis
 
 **Example:**
@@ -171,6 +176,7 @@ Compares the scenarios of one region side by side with **one shared filter**. It
 
 **Parameters:**
 - **Data Source** (and **Data Folder**), **Region** and **Scenarios to Compare** (default: all scenarios the source has for the region)
+- **Municipalities (Kommuner)**: count only what lies (at least partly) in these municipalities; "total" then means the total in the municipalities. Needs a spatial selection per file, so it takes longer than the attribute criteria
 - The same criteria as in *Filter Layers*: elevation, aspect (cardinal directions or degree range), building safety class, minimum max PPR
 - **Output Directory** and **Report Format** (HTML, CSV or both)
 
@@ -265,6 +271,8 @@ The data sources offered in the tools ("Data Source") are the standard results p
 "sources": {"My run": "D:\\ALARM\\run1", "ALARM2.2": ""}
 ```
 
+The municipality boundaries come from `kommune_gdb` (default `L:\ALARM\BaseData\Basisdata_0000_Norge_25833_Kommuner_FGDB.gdb`, feature class `kommune`), or `ALARM_KOMMUNE_GDB`. The municipality list in the dialogs comes with the toolbox (`alarm_core/kommuner.json`: number, official names and bounding box of the 357 municipalities, made from the same Kartverket dataset, CC BY 4.0), so the dialogs never wait for `L:`. After a municipality reform it has to be regenerated.
+
 The environment variable wins over the JSON file, which wins over the defaults. A broken JSON file is reported with its file name. `alarm_tools_config.json` is not tracked by git.
 
 ### Optimized copies
@@ -289,6 +297,8 @@ alarm_core/            everything that does not need arcpy
     filters.py         filter criteria: SQL for the layers + the same logic in Python
     compare.py         scenario comparison and its HTML/CSV tables
     report.py          statistics report for a Risk Assessment layer
+    kommune.py         municipalities: labels, the object-ID SQL, the bundled list kommuner.json
+    webmap.py          the interactive map of the HTML report (Leaflet)
 tests/                 pytest
 alarm_tools_config.example.json
 ```
@@ -303,7 +313,7 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 129 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 160 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
 - `tests/test_arcpy_sources.py` (data source switch, single-scenario runs) needs only arcpy and a project file (`ALARM_TEST_APRX`): it creates tiny shapefiles in the layout of a single-scenario run. Two of its tests also use the real `L:\ALARM\ALARM2.2` folder when it is reachable.
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
 - If optimized copies of that scenario exist, the integration tests load from them. Run them a second time with `ALARM_OPTIMIZED_BASE` set to an empty value to cover loading from the originals.
@@ -340,6 +350,9 @@ The ALARM pipeline processes 5 scenarios per region:
 ### Changes to the code do not show up
 - Right-click the toolbox in the Catalog pane -> *Refresh*; if that is not enough, restart ArcGIS Pro
 
+### The map in the HTML report stays empty
+- The map loads Leaflet from unpkg.com and the background from cache.kartverket.no; without internet access only the tables are shown. Open the report in a current browser (Edge, Chrome, Firefox)
+
 ### "Symbology not applied"
 - Check that layer type matches selected symbology
 - Verify field names exist in the attribute table
@@ -349,7 +362,8 @@ The ALARM pipeline processes 5 scenarios per region:
 
 - **ArcGIS Pro** 3.0 or later (uses `ExportFeatures`, available since 3.0; tested with 3.5)
 - **Python** 3.9+ (included with ArcGIS Pro 3.x)
-- **Network access** to `L:\ALARM\Results`
+- **Network access** to `L:\ALARM\Results` (and to `L:\ALARM\BaseData` for municipality boundaries)
+- **Internet access** to view the map in the HTML report
 
 ## Contributing
 
