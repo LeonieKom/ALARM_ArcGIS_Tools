@@ -113,12 +113,20 @@ def tables(stats):
     ]
 
 
-def context_lines(layer_name, definition_query, selected, source=None):
-    """What the report is based on: layer, filter and selection."""
+def context_lines(layer_name, definition_query, selected, source=None, description=None):
+    """What the report is based on: layer, filter and selection.
+
+    description is the readable name Filter Layers gives its filter (e.g. 'ALARM: Kommune Tromsø;
+    >= 300 m'); the SQL is listed below it, since a municipality filter is a long list of IDs.
+    """
     lines = [("Layer", layer_name)]
     if source:
         lines.append(("Data source", source))
-    lines.append(("Filter", definition_query if definition_query else "none - all features of the layer"))
+    if definition_query and description:
+        lines.append(("Filter", description))
+        lines.append(("Filter (SQL)", definition_query))
+    else:
+        lines.append(("Filter", definition_query if definition_query else "none - all features of the layer"))
     if selected:
         lines.append(("Selection", f"{selected} selected features - only these are included"))
     return lines
@@ -132,7 +140,8 @@ def _fmt(value, digits):
     return "-" if value is None else f"{value:.{digits}f}"
 
 
-def write_html(path, stats, context, generated=None):
+def write_html(path, stats, context, generated=None, map_html=None, head_extra=None):
+    """The report as HTML; map_html / head_extra add the map (see alarm_core.webmap)."""
     generated = generated or datetime.now()
     s = summary(stats)
     layer_name = dict(context).get("Layer", "")
@@ -155,6 +164,7 @@ def write_html(path, stats, context, generated=None):
         .summary {{ background-color: #e7f3fe; padding: 15px; border-left: 6px solid #2196F3; margin: 20px 0; }}
         .context {{ background-color: #f2f2f2; padding: 10px 15px; border-left: 6px solid #999; }}
     </style>
+    {head_extra or ""}
 </head>
 <body>
     <h1>Risk Assessment Report</h1>
@@ -168,6 +178,8 @@ def write_html(path, stats, context, generated=None):
         <p><strong>Elevation Range:</strong> {_fmt(s['elevation_range'][0], 0)} - {_fmt(s['elevation_range'][1], 0)} m{escape(elev_note)}</p>
     </div>
 """]
+    if map_html:
+        parts.append(map_html)
     for title, header, rows in tables(stats):
         parts.append(f"""
     <h2>{escape(title)}</h2>
