@@ -218,3 +218,56 @@ def write_csv(path, stats, context, generated=None):
             writer.writerow([title.upper(), 'Count', 'Percentage'])
             for label, count in rows:
                 writer.writerow([label, count, f"{_pct(count, stats['total']):.1f}%"])
+
+
+# ------------------------------------------------------------ several risk layers --
+
+def merge_buildings(records, key="bld_id"):
+    """Buildings from several risk layers, each building once.
+
+    A municipality can lie in several forecast regions, and neighbouring regions overlap, so
+    the same building (same bld_id) can be in more than one layer. The record with the highest
+    max_ppr is kept (the most unfavourable result). Records without an id are all kept.
+
+    Args:
+        records: dicts with at least key and 'max_ppr', in layer order
+    Returns:
+        (kept records in their original order, number of duplicates dropped)
+    """
+    best = {}
+    for i, record in enumerate(records):
+        building = record.get(key)
+        if building is None or building == "":
+            continue
+        ppr = record.get('max_ppr')
+        ppr = float("-inf") if ppr is None else ppr
+        if building not in best or ppr > best[building][0]:
+            best[building] = (ppr, i)
+    keep = {i for _, i in best.values()}
+    kept = [r for i, r in enumerate(records) if r.get(key) in (None, "") or i in keep]
+    return kept, len(records) - len(kept)
+
+
+def context_for_layers(entries, duplicates=0):
+    """Context lines for one or several layers.
+
+    entries: [{'name', 'sql', 'description', 'selected', 'source'}]; one entry gives the same
+    lines as context_lines.
+    """
+    if len(entries) == 1:
+        e = entries[0]
+        return context_lines(e['name'], e.get('sql') or "", e.get('selected') or 0, e.get('source'),
+                             description=e.get('description'))
+    lines = [("Layers", f"{len(entries)} risk assessment layers, combined")]
+    for n, e in enumerate(entries, start=1):
+        lines.append((f"Layer {n}", e['name']))
+        if e.get('sql'):
+            lines.append((f"Layer {n} filter", e.get('description') or e['sql']))
+        else:
+            lines.append((f"Layer {n} filter", "none - all features of the layer"))
+        if e.get('selected'):
+            lines.append((f"Layer {n} selection", f"{e['selected']} selected features - only these are included"))
+    if duplicates:
+        lines.append(("Duplicates", f"{duplicates} buildings were in more than one layer; each is counted once "
+                                    f"(with its highest max PPR)"))
+    return lines

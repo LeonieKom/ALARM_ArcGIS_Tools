@@ -499,3 +499,79 @@ def test_real_municipality_filter_on_alarm22(env, tmp_path, monkeypatch):
     layer = next(l for l in env.map.listLayers() if l.isFeatureLayer and l.name.startswith("risk_assessment_1_Lyngen"))
     inside = int(arcpy.management.GetCount(layer)[0])
     assert 0 < inside <= total
+
+
+# ------------------------------------------------- report over several risk layers --
+
+def _map_data(html):
+    return _json.loads(_re.search(r'<script type="application/json" id="alarm-data">(.*?)</script>', html,
+                                  _re.S).group(1))
+
+
+@pytest.fixture(scope="module")
+def two_regions(env, tmp_path_factory):
+    """Two risk layers sharing building 2, with tracks/PRAs of the same group and a boundary layer."""
+    folder = tmp_path_factory.mktemp("two_regions")
+    risk_fields = [("bld_id", "LONG", None), ("saf_class", "TEXT", 4), ("max_ppr", "DOUBLE", None),
+                   ("mean_ppr", "DOUBLE", None), ("pra_elev", "DOUBLE", None), ("pra_aspct", "TEXT", 4)]
+    _shapefile(folder, "risk_RA_A_x.shp", risk_fields, [(1, "S2", 10.0, 5.0, 100.0, "N"), (2, "S3", 20.0, 9.0, 200.0, "E")])
+    _shapefile(folder, "risk_RB_A_x.shp", risk_fields, [(9, "S1", 1.0, 1.0, 50.0, "S"), (2, "S3", 50.0, 20.0, 200.0, "E"),
+                                                        (3, "S2", 5.0, 2.0, 300.0, "W")])
+    _shapefile(folder, "tracks_RA_A_x.shp", [("pra_elev", "DOUBLE", None), ("pra_aspdeg", "LONG", None),
+                                             ("med_pres", "DOUBLE", None)], [(100.0, 10, 50.0)])
+    # a track far away from every building must not be drawn
+    path = str(folder / "tracks_RA_A_x.shp")
+    with arcpy.da.InsertCursor(path, ["SHAPE@", "pra_elev", "pra_aspdeg", "med_pres"]) as cursor:
+        cursor.insertRow((_square(100000), 100.0, 10, 50.0))
+    _shapefile(folder, "pra_RA_A_x.shp", [("elev_med", "DOUBLE", None), ("aspect_deg", "DOUBLE", None)], [(100.0, 10.0)])
+    _shapefile(folder, "kommune_9901.shp", [("navn", "TEXT", 50)], [("Testkommune",)])
+
+    m = env.map
+    group = m.createGroupLayer("Test regions - Scenario A")
+    added = []
+    for name in ("risk_RA_A_x", "risk_RB_A_x", "tracks_RA_A_x", "pra_RA_A_x"):
+        layer = m.addDataFromPath(str(folder / f"{name}.shp"))
+        m.addLayerToGroup(group, layer)
+        m.removeLayer(layer)
+        added.append(name)
+    boundary = m.addDataFromPath(str(folder / "kommune_9901.shp"))
+    boundary.name = "Kommune: Testkommune"
+    layers = {l.name: l for l in m.listLayers() if l.isFeatureLayer}
+    return layers
+
+
+def test_report_of_two_layers_counts_each_building_once(env, two_regions, tmp_path, capfd):
+    risk_a, risk_b = two_regions["risk_RA_A_x"], two_regions["risk_RB_A_x"]
+    capfd.readouterr()
+    env.mod.GenerateReport().execute([P([risk_a, risk_b]), P(str(tmp_path)), P("Both"), P(True)], None)
+    out = "".join(capfd.readouterr())
+    assert "1 buildings are in more than one layer" in out
+    html_file = next(tmp_path.glob("risk_report_*.html"))
+    assert "_and_1_more_" in html_file.name
+    html = html_file.read_text(encoding="utf-8")
+    assert "Total Buildings Analyzed:</strong> 4<" in html           # 1, 2, 9, 3 - building 2 once
+    assert "2 risk assessment layers" in html and "Duplicates" in html
+    data = _map_data(html)
+    points = [x for x in data['features'] if not x['properties'].get('outline')]
+    b2 = [x for x in points if x['properties'].get('bld_id') == 2]
+    assert len(b2) == 1 and b2[0]['properties']['max_ppr'] == 50.0     # the higher of the two results
+    assert b2[0]['properties']['source'] == "risk_RB_A_x"
+    assert data['areas'][0]['max_ppr'] == 50.0                       # priority: highest pressure first
+    csv_text = next(tmp_path.glob("risk_report_*.csv")).read_text(encoding="utf-8")
+    assert "Total Buildings,4" in csv_text
+
+
+def test_report_map_has_tracks_pras_and_boundary_as_background(env, two_regions, tmp_path):
+    risk_a = two_regions["risk_RA_A_x"]
+    env.mod.GenerateReport().execute([P([risk_a]), P(str(tmp_path)), P("HTML"), P(True)], None)
+    data = _map_data(next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8"))
+    assert len(data['context']['tracks']['features']) == 1           # the far one is left out
+    assert len(data['context']['pras']['features']) == 1
+    assert data['context']['boundaries']['features'][0]['properties']['name'] == "Testkommune"
+
+
+def test_layers_can_also_be_given_by_name(env, two_regions, tmp_path):
+    risk_b = two_regions["risk_RB_A_x"]
+    env.mod.GenerateReport().execute([P([risk_b.longName]), P(str(tmp_path)), P("HTML"), P(False)], None)
+    html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+    assert "Total Buildings Analyzed:</strong> 3<" in html

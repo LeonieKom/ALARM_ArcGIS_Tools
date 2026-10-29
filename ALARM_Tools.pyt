@@ -386,6 +386,34 @@ def _short_sql(sql, limit=300):
     return sql if len(sql) <= limit else f"{sql[:limit]}... ({len(sql)} characters)"
 
 
+# Name prefix of the municipality boundary layers that Load ALARM Data adds
+KOMMUNE_LAYER_PREFIX = "Kommune: "
+
+
+def _layers_of(param):
+    """Map layers chosen in a (multi-value) layer parameter; values may be layer objects or names."""
+    values = param.values if getattr(param, "values", None) else ([param.value] if param.value is not None else [])
+    layers, names = [], []
+    for value in values or []:
+        if hasattr(value, "longName") and hasattr(value, "definitionQuery"):
+            layers.append(value)
+        else:
+            names.append(str(value).strip().strip("'\""))
+    if names:
+        try:
+            map_obj = arcpy.mp.ArcGISProject("CURRENT").activeMap
+        except Exception:
+            map_obj = None
+        candidates = map_obj.listLayers() if map_obj else []
+        for name in names:
+            match = [l for l in candidates if l.isFeatureLayer and l.longName == name] or                     [l for l in candidates if l.isFeatureLayer and l.name == name]
+            if match:
+                layers.append(match[0])
+            else:
+                arcpy.AddWarning(f"Layer '{name}' not found in the active map - skipped")
+    return layers
+
+
 def _split_values(text):
     """Values of a multi-value parameter (valueAsText is 'a;b;c', values may be quoted)."""
     if not text:
@@ -1448,22 +1476,30 @@ class ExportFilteredData(object):
 
 
 class GenerateReport(object):
+    # background of the report map: tracks and PRAs near the buildings, simplified
+    MAP_CONTEXT_DISTANCE_M = 1000
+    MAP_GENERALIZE_M = 5
+    MAP_MAX_CONTEXT_FEATURES = 20000
+    MAP_FIELDS = ["bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct"]
+
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "3. Generate Report"
-        self.description = "Generate statistics report for Risk Assessment layer"
+        self.description = ("Statistics report (HTML with map, CSV) for one or several Risk Assessment layers, "
+                            "e.g. all regions a municipality lies in")
         self.canRunInBackground = False
 
     def getParameterInfo(self):
         """Define parameter definitions"""
 
-        # Parameter 0: Risk Assessment Layer
+        # Parameter 0: Risk Assessment layers (several: combined, each building once)
         param0 = arcpy.Parameter(
-            displayName="Risk Assessment Layer",
+            displayName="Risk Assessment Layers",
             name="risk_layer",
-            datatype="GPLayer",
+            datatype="GPFeatureLayer",
             parameterType="Required",
-            direction="Input")
+            direction="Input",
+            multiValue=True)
 
         # Parameter 1: Output directory
         param1 = arcpy.Parameter(
@@ -1510,47 +1546,60 @@ class GenerateReport(object):
 
     def execute(self, parameters, messages):
         """The source code of the tool."""
-        layer = parameters[0].value
+        layers = _layers_of(parameters[0])
         output_dir = parameters[1].valueAsText
         report_format = parameters[2].valueAsText
         include_map = bool(parameters[3].value) if len(parameters) > 3 and parameters[3].value is not None else True
-
-        arcpy.AddMessage(f"Analyzing layer: {layer.name}")
-        definition_query = getattr(layer, 'definitionQuery', "") or ""
-        if definition_query:
-            arcpy.AddMessage(f"Active filter: {definition_query}")
-        selected = _selection_count(layer)
-        if selected:
-            arcpy.AddWarning(f"{selected} features are selected in '{layer.name}' - the report only covers the "
-                             f"selection. Clear the selection to report everything the filter shows.")
-
-        buildings = []
-        try:
-            # The cursor respects the layer's filter and selection
-            with arcpy.da.SearchCursor(layer, _report.FIELDS) as cursor:
-                stats = _report.collect(cursor)
-            if include_map and report_format in ["HTML", "Both"]:
-                buildings = self._buildings_for_map(layer)
-        except Exception as e:
-            arcpy.AddError(f"Could not read {', '.join(_report.FIELDS)} from '{layer.name}' - "
-                           f"is it a Risk Assessment layer? ({e})")
+        if not layers:
+            arcpy.AddError("No Risk Assessment layer found in the active map.")
             return
+        with_map = include_map and report_format in ["HTML", "Both"]
 
+        entries, records = [], []
+        for layer in layers:
+            arcpy.AddMessage(f"Analyzing layer: {layer.name}")
+            sql = getattr(layer, 'definitionQuery', "") or ""
+            if sql:
+                arcpy.AddMessage(f"  Active filter: {_filter_name(layer) or _short_sql(sql)}")
+            selected = _selection_count(layer)
+            if selected:
+                arcpy.AddWarning(f"  {selected} features are selected in '{layer.name}' - the report only covers "
+                                 f"the selection. Clear the selection to report everything the filter shows.")
+            try:
+                layer_records = self._read_buildings(layer, with_map, tag=layer.name if len(layers) > 1 else None)
+            except Exception as e:
+                arcpy.AddError(f"Could not read {', '.join(_report.FIELDS)} from '{layer.name}' - "
+                               f"is it a Risk Assessment layer? ({e})")
+                return
+            arcpy.AddMessage(f"  {len(layer_records)} buildings")
+            records.extend(layer_records)
+            entries.append({'name': layer.name, 'sql': _short_sql(sql), 'selected': selected,
+                            'source': getattr(layer, 'dataSource', None),
+                            'description': _filter_name(layer) if sql else None})
+
+        records, duplicates = _report.merge_buildings(records)
+        if duplicates:
+            arcpy.AddMessage(f"{duplicates} buildings are in more than one layer - each is counted once "
+                             f"(highest max PPR)")
+        stats = _report.collect((r['saf_class'], r['max_ppr'], r['mean_ppr'], r['pra_elev'], r['pra_aspct'])
+                                for r in records)
         arcpy.AddMessage(f"Analyzed {stats['total']} buildings")
         if stats['elevation'][_report.UNKNOWN]:
             arcpy.AddWarning(f"{stats['elevation'][_report.UNKNOWN]} buildings have no elevation (listed as Unknown)")
 
-        source = getattr(layer, 'dataSource', None)
-        context = _report.context_lines(layer.name, _short_sql(definition_query), selected, source,
-                                        description=_filter_name(layer) if definition_query else None)
+        context = _report.context_for_layers(entries, duplicates)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layer.name}_{timestamp}")
+        more = f"_and_{len(layers) - 1}_more" if len(layers) > 1 else ""
+        base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layers[0].name}{more}_{timestamp}")
 
         if report_format in ["HTML", "Both"]:
             html_path = os.path.join(output_dir, base + ".html")
             if include_map:
-                payload = _webmap.build_payload(buildings)
-                arcpy.AddMessage(f"Map: {len(buildings)} buildings in {len(payload['areas'])} affected areas")
+                payload = self._map_payload(layers, records)
+                context_info = ", ".join(f"{len(v['features'])} {k}" for k, v in payload['context'].items())
+                arcpy.AddMessage(f"Map: {sum(1 for r in records if r.get('lon') is not None)} buildings in "
+                                 f"{len(payload['areas'])} affected areas"
+                                 + (f"; background: {context_info}" if context_info else ""))
                 _report.write_html(html_path, stats, context, map_html=_webmap.map_section(payload),
                                    head_extra=_webmap.head_html())
             else:
@@ -1562,29 +1611,124 @@ class GenerateReport(object):
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return
 
-    MAP_FIELDS = ["bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct"]
+    # ------------------------------------------------------------------- reading --
 
-    def _buildings_for_map(self, layer):
-        """Buildings as WGS84 position, outline and attributes (respects filter and selection)."""
+    def _read_buildings(self, layer, with_shape, tag=None):
+        """Records of a risk layer (respects filter and selection), optionally with WGS84 geometry."""
         names = {f.name.lower(): f.name for f in arcpy.ListFields(layer)}
+        missing = [f for f in _report.FIELDS if f not in names]
+        if missing:
+            raise KeyError(", ".join(missing))
         present = [f for f in self.MAP_FIELDS if f in names]     # older results may lack some of them
-        fields = [names[f] for f in present]
-        buildings = []
-        with arcpy.da.SearchCursor(layer, ["SHAPE@"] + fields, spatial_reference=arcpy.SpatialReference(4326)) as cursor:
+        fields = [names[f] for f in present] + (["SHAPE@"] if with_shape else [])
+        kwargs = {'spatial_reference': arcpy.SpatialReference(4326)} if with_shape else {}
+        records = []
+        with arcpy.da.SearchCursor(layer, fields, **kwargs) as cursor:
             for row in cursor:
-                shape = row[0]
-                if shape is None:
-                    continue
-                centre = shape.centroid if shape.type != "point" else shape.firstPoint
-                try:
-                    geometry = shape.__geo_interface__ if shape.type == "polygon" else None
-                except Exception:
-                    geometry = None
-                props = {}
-                for name, value in zip(present, row[1:]):
-                    props[name] = round(value, 1) if isinstance(value, float) else value
-                buildings.append({'lon': centre.X, 'lat': centre.Y, 'geometry': geometry, 'props': props})
-        return buildings
+                record = {name: value for name, value in zip(present, row)}
+                for name in self.MAP_FIELDS:
+                    record.setdefault(name, None)
+                if tag:
+                    record['source'] = tag
+                if with_shape and row[-1] is not None:
+                    shape = row[-1]
+                    centre = shape.centroid if shape.type != "point" else shape.firstPoint
+                    record['lon'], record['lat'] = centre.X, centre.Y
+                    try:
+                        record['geometry'] = shape.__geo_interface__ if shape.type == "polygon" else None
+                    except Exception:
+                        record['geometry'] = None
+                records.append(record)
+        return records
+
+    def _map_payload(self, layers, records):
+        """Buildings plus background (tracks and PRAs near them, municipality boundaries)."""
+        buildings = []
+        for r in records:
+            if r.get('lon') is None:
+                continue
+            props = {k: (round(r[k], 1) if isinstance(r[k], float) else r[k])
+                     for k in self.MAP_FIELDS + ['source'] if r.get(k) is not None}
+            buildings.append({'lon': r['lon'], 'lat': r['lat'], 'geometry': r.get('geometry'), 'props': props})
+        tracks_layers, pra_layers, boundary_layers = self._context_layers(layers)
+        tracks = [g for lyr in tracks_layers for g in self._features_near(lyr, layers)]
+        pras = [g for lyr in pra_layers for g in self._features_near(lyr, layers)]
+        boundaries = [g for lyr in boundary_layers for g in self._all_features(lyr, 20)]
+        return _webmap.build_payload(buildings, tracks=tracks, pras=pras, boundaries=boundaries)
+
+    def _context_layers(self, risk_layers):
+        """Tracks and PRA layers of the same groups as the risk layers, and municipality boundaries."""
+        try:
+            map_obj = arcpy.mp.ArcGISProject("CURRENT").activeMap
+        except Exception:
+            map_obj = None
+        if map_obj is None:
+            return [], [], []
+        groups = {lyr.longName.rsplit("\\", 1)[0] for lyr in risk_layers if "\\" in lyr.longName}
+        detector = FilterLayers()
+        tracks, pras, boundaries = [], [], []
+        for lyr in map_obj.listLayers():
+            if not lyr.isFeatureLayer or not lyr.visible:
+                continue
+            if lyr.name.startswith(KOMMUNE_LAYER_PREFIX):
+                boundaries.append(lyr)
+                continue
+            parent = lyr.longName.rsplit("\\", 1)[0] if "\\" in lyr.longName else None
+            if parent is None or parent not in groups:
+                continue
+            kind = detector._detect_layer_type(lyr)
+            if kind == "tracks":
+                tracks.append(lyr)
+            elif kind == "pras":
+                pras.append(lyr)
+        return tracks, pras, boundaries
+
+    def _geojson(self, shape, tolerance):
+        """Simplified WGS84 GeoJSON of a shape (simplified in metres when the layer is projected)."""
+        if shape is None:
+            return None
+        if tolerance and shape.spatialReference and shape.spatialReference.type == "Projected":
+            shape = shape.generalize(tolerance)
+        try:
+            return shape.projectAs(arcpy.SpatialReference(4326)).__geo_interface__
+        except Exception:
+            return None
+
+    def _features_near(self, layer, risk_layers):
+        """Features of layer (its filter applies) within MAP_CONTEXT_DISTANCE_M of the buildings."""
+        name = f"alarm_ctx_{uuid.uuid4().hex[:8]}"
+        arcpy.management.MakeFeatureLayer(layer, name)
+        try:
+            for i, risk in enumerate(risk_layers):
+                arcpy.management.SelectLayerByLocation(
+                    name, "WITHIN_A_DISTANCE", risk, f"{self.MAP_CONTEXT_DISTANCE_M} Meters",
+                    "NEW_SELECTION" if i == 0 else "ADD_TO_SELECTION")
+            out = []
+            with arcpy.da.SearchCursor(name, ["SHAPE@"]) as cursor:
+                for (shape,) in cursor:
+                    if len(out) >= self.MAP_MAX_CONTEXT_FEATURES:
+                        arcpy.AddWarning(f"  {layer.name}: only the first {self.MAP_MAX_CONTEXT_FEATURES} features "
+                                         f"near the buildings are drawn on the map")
+                        break
+                    geometry = self._geojson(shape, self.MAP_GENERALIZE_M)
+                    if geometry:
+                        out.append({'geometry': geometry})
+            return out
+        finally:
+            arcpy.management.Delete(name)
+
+    def _all_features(self, layer, tolerance):
+        """All features of a (boundary) layer, with their name if the layer has a name field."""
+        names = {f.name.lower(): f.name for f in arcpy.ListFields(layer)}
+        name_field = next((names[n] for n in ("kommunenavn", "navn", "name") if n in names), None)
+        fields = ["SHAPE@"] + ([name_field] if name_field else [])
+        out = []
+        with arcpy.da.SearchCursor(layer, fields) as cursor:
+            for row in cursor:
+                geometry = self._geojson(row[0], tolerance)
+                if geometry:
+                    out.append({'geometry': geometry, 'props': {'name': row[1]} if len(row) > 1 else {}})
+        return out
 
 
 class CompareScenarios(object):

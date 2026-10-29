@@ -76,3 +76,39 @@ def test_csv_contains_the_context(tmp_path):
     assert ["Filter", "max_ppr >= 10"] in rows
     assert ["Buildings without elevation", "1"] in rows
     assert ["Elevation Min", "100"] in rows
+
+
+def test_merge_buildings_keeps_each_building_once_with_the_highest_pressure():
+    records = [
+        {'bld_id': 1, 'max_ppr': 10.0, 'layer': 'a'},
+        {'bld_id': 2, 'max_ppr': 5.0, 'layer': 'a'},
+        {'bld_id': 1, 'max_ppr': 40.0, 'layer': 'b'},          # same building, higher in the other region
+        {'bld_id': 2, 'max_ppr': None, 'layer': 'b'},
+        {'bld_id': None, 'max_ppr': 1.0, 'layer': 'b'},         # no id: always kept
+        {'bld_id': None, 'max_ppr': 1.0, 'layer': 'b'},
+    ]
+    kept, dropped = report.merge_buildings(records)
+    assert dropped == 2
+    assert [(r['bld_id'], r['max_ppr'], r['layer']) for r in kept] == [
+        (2, 5.0, 'a'), (1, 40.0, 'b'), (None, 1.0, 'b'), (None, 1.0, 'b')]
+
+
+def test_merge_of_one_layer_changes_nothing():
+    records = [{'bld_id': i, 'max_ppr': float(i)} for i in range(5)]
+    assert report.merge_buildings(records) == (records, 0)
+
+
+def test_context_for_one_layer_is_the_plain_context():
+    entry = {'name': 'lyr', 'sql': 'max_ppr >= 10', 'description': None, 'selected': 0, 'source': None}
+    assert report.context_for_layers([entry]) == report.context_lines('lyr', 'max_ppr >= 10', 0)
+
+
+def test_context_for_several_layers_lists_each_with_its_filter():
+    entries = [{'name': 'risk_A', 'sql': 'x', 'description': 'ALARM: Kommune Tromsø', 'selected': 0},
+               {'name': 'risk_B', 'sql': '', 'description': None, 'selected': 3}]
+    lines = dict(report.context_for_layers(entries, duplicates=4))
+    assert lines["Layers"].startswith("2 risk assessment layers")
+    assert lines["Layer 1 filter"] == "ALARM: Kommune Tromsø"
+    assert lines["Layer 2 filter"].startswith("none")
+    assert "3 selected" in lines["Layer 2 selection"]
+    assert lines["Duplicates"].startswith("4 buildings")
