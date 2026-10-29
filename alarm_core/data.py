@@ -33,13 +33,96 @@ def completed_regions(results_base):
     return sorted(regions)
 
 
+# A run of a single scenario (pipeline "quick settings") writes its files directly into
+# <region>/merged/ instead of one folder per scenario, e.g. 'tracks_1_Lyngen_A_80-60_prox0_rel1_2m.shp'
+# (with scenario id) or 'tracks_1_Lyngen_80-60_prox0_rel1_2m.shp' (without). Such a folder is
+# offered as one scenario: its id, or FLAT_NO_ID when the file names carry none.
+FLAT_NO_ID = "single"
+_FLAT_KINDS = (("tracks", ".shp"), ("pra", ".shp"), ("ppr", ".tif"), ("pfv", ".tif"), ("pft", ".tif"))
+_SCENARIO_PART = r"(?:(?P<id>[A-Za-z][A-Za-z0-9]*)_)?(?P<thresholds>\d+-\d+_prox\d+_rel[\d_.]+m)"
+_FLAT_NAME = re.compile(rf"^{_SCENARIO_PART}")
+
+
+def flat_scenario(merged_dir, region):
+    """(scenario id or None, parameters text) of a scenario run written flat into merged_dir.
+
+    Returns None if merged_dir holds no such result files. The file names start with
+    '<kind>_<region>_'; the rest is '[<id>_]<hi>-<lo>_prox<p>_rel<t>m'.
+    """
+    merged_dir = Path(merged_dir)
+    if not merged_dir.is_dir():
+        return None
+    for kind, ext in _FLAT_KINDS:
+        prefix = f"{kind}_{region}_"
+        for path in sorted(merged_dir.glob(f"{kind}_*{ext}")):
+            if is_ignored(path.name) or path.name.lower().startswith("pra_binary_"):
+                continue
+            if not path.name.startswith(prefix):
+                continue
+            match = _FLAT_NAME.match(path.stem[len(prefix):])
+            if match:
+                return match.group("id"), match.group("thresholds")
+    return None
+
+
 def find_scenario_dir(results_base, region, scenario_id):
-    """Scenario folder <results_base>/<region>/merged/<scenario_id>_*, or None."""
+    """Folder with the results of one scenario, or None.
+
+    <results_base>/<region>/merged/<scenario_id>_* if it exists; otherwise the merged folder
+    itself when it holds a single-scenario run with that id (see FLAT_NO_ID).
+    """
     merged = Path(results_base) / region / "merged"
     if not merged.exists():
         return None
-    matches = sorted(merged.glob(f"{scenario_id}_*"))
-    return matches[0] if matches else None
+    matches = sorted(p for p in merged.glob(f"{scenario_id}_*") if p.is_dir())
+    if matches:
+        return matches[0]
+    flat = flat_scenario(merged, region)
+    if flat and (flat[0] or FLAT_NO_ID) == scenario_id:
+        return merged
+    return None
+
+
+def is_flat_scenario(scenario_dir):
+    """True if the scenario folder is a region's merged folder itself (single-scenario run)."""
+    return Path(scenario_dir).name == "merged"
+
+
+def scenario_dir_label(scenario_dir):
+    """Name for a scenario folder in reports: the folder name, or '<region>/merged' for a flat run."""
+    scenario_dir = Path(scenario_dir)
+    if is_flat_scenario(scenario_dir):
+        return f"{scenario_dir.parent.name}/merged"
+    return scenario_dir.name
+
+
+def _describe(parameters_text):
+    """'80-60_prox0_rel1_2m' / '80-60_prox0_rel1.2m' -> '80-60, prox0, rel1.2m'."""
+    text = re.sub(r"rel(\d+)_(\d+)m", r"rel\1.\2m", parameters_text)
+    return text.replace("_", ", ")
+
+
+def discover_scenarios(results_base, regions):
+    """{scenario id: description} found in the merged folders of these regions.
+
+    Used for data folders other than the standard results (whose scenarios are configured).
+    Scenario folders are '<id>_<parameters>'; a flat single-scenario run counts as one scenario.
+    """
+    found = {}
+    for region in regions:
+        merged = Path(results_base) / region / "merged"
+        if not merged.is_dir():
+            continue
+        for sub in sorted(p for p in merged.iterdir() if p.is_dir()):
+            match = re.match(r"^(?P<id>[A-Za-z][A-Za-z0-9]*)_(?P<rest>\d+-\d+_.+)$", sub.name)
+            if match:
+                found.setdefault(match.group("id"), _describe(match.group("rest")))
+        flat = flat_scenario(merged, region)
+        if flat:
+            scenario_id = flat[0] or FLAT_NO_ID
+            label = _describe(flat[1])
+            found.setdefault(scenario_id, label if flat[0] else f"single run without scenario id, {label}")
+    return dict(sorted(found.items()))
 
 
 def is_ignored(name):

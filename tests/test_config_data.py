@@ -216,3 +216,113 @@ def test_gpkg_data_source_matches_the_path_it_was_added_from():
     assert data.comparable_source(reported) == data.comparable_source(added)
     assert data.comparable_source(r"l:/fast/R/D/ppr.tif") == data.comparable_source(r"L:\fast\R\D\ppr.tif")
     assert data.comparable_source(reported) != data.comparable_source(added.replace("risk_R_D", "risk_R_E"))
+
+
+# ------------------------------------------------------------------------ sources --
+
+def test_sources_default_to_standard_plus_alarm22(tmp_path):
+    cfg = config.load_config(path=tmp_path / "none.json", environ={})
+    assert list(cfg['sources']) == [config.STANDARD_SOURCE, "ALARM2.2"]
+    assert cfg['sources'][config.STANDARD_SOURCE] == cfg['results_base']
+    assert cfg['sources']["ALARM2.2"] == Path(r"L:\ALARM\ALARM2.2")
+
+
+def test_standard_source_follows_results_base(tmp_path):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"results_base": str(tmp_path / "res")}))
+    assert config.load_config(path=f, environ={})['sources'][config.STANDARD_SOURCE] == tmp_path / "res"
+
+
+def test_sources_can_be_added_changed_and_removed(tmp_path):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"sources": {"My run": str(tmp_path / "run1"), "ALARM2.2": "", config.STANDARD_SOURCE: "X:/ignored"}}))
+    sources = config.load_config(path=f, environ={})['sources']
+    assert list(sources) == [config.STANDARD_SOURCE, "My run"]            # ALARM2.2 removed
+    assert sources["My run"] == tmp_path / "run1"
+    assert sources[config.STANDARD_SOURCE] == Path(config.DEFAULT_RESULTS_BASE)   # cannot be replaced
+
+
+# ------------------------------------------------- single-scenario run (flat layout) --
+
+def make_flat(base, region="1_Lyngen", scenario_id="A", params="80-60_prox0_rel1_2m", extra=()):
+    """<base>/<region>/merged/ with the files of a single-scenario run, as the pipeline writes them."""
+    merged = base / region / "merged"
+    (merged / "risk_assessment").mkdir(parents=True)
+    stem = f"{scenario_id}_{params}" if scenario_id else params
+    for name in (f"tracks_{region}_{stem}.shp", f"pra_{region}_{stem}.shp", f"ppr_{region}_{stem}_max.tif",
+                 f"pra_binary_{region}.shp", *extra):
+        (merged / name).touch()
+    (merged / "risk_assessment" / f"risk_{region}_{stem}.shp").touch()
+    return merged
+
+
+def test_flat_run_with_scenario_id_is_found_by_its_id(tmp_path):
+    merged = make_flat(tmp_path, scenario_id="A")
+    assert data.flat_scenario(merged, "1_Lyngen") == ("A", "80-60_prox0_rel1_2m")
+    assert data.find_scenario_dir(tmp_path, "1_Lyngen", "A") == merged
+    assert data.find_scenario_dir(tmp_path, "1_Lyngen", "B") is None
+    assert data.is_flat_scenario(merged)
+    assert data.scenario_dir_label(merged) == "1_Lyngen/merged"
+
+
+def test_flat_run_without_scenario_id(tmp_path):
+    merged = make_flat(tmp_path, scenario_id=None)
+    assert data.flat_scenario(merged, "1_Lyngen") == (None, "80-60_prox0_rel1_2m")
+    assert data.find_scenario_dir(tmp_path, "1_Lyngen", data.FLAT_NO_ID) == merged
+    assert data.find_scenario_dir(tmp_path, "1_Lyngen", "A") is None
+
+
+def test_the_region_name_is_not_taken_for_a_scenario_id(tmp_path):
+    """'tracks_1_Lyngen_80-60_...' has no id; 'Lyngen' must not be read as one."""
+    merged = make_flat(tmp_path, region="1_Lyngen", scenario_id=None)
+    assert data.flat_scenario(merged, "1_Lyngen")[0] is None
+
+
+def test_files_of_another_region_do_not_count(tmp_path):
+    merged = make_flat(tmp_path, region="1_Lyngen")
+    assert data.flat_scenario(merged, "2_Tromso") is None
+
+
+def test_flat_detection_ignores_backups_and_the_binary_pra(tmp_path):
+    merged = tmp_path / "R" / "merged"
+    merged.mkdir(parents=True)
+    (merged / "pra_binary_R.shp").touch()
+    (merged / "tracks_R_B_80-60_prox0_rel1_2m.backup.shp").touch()
+    assert data.flat_scenario(merged, "R") is None
+
+
+def test_scenario_folders_win_over_flat_files(tmp_path):
+    merged = make_flat(tmp_path, scenario_id="A")
+    (merged / "A_80-60_prox0_rel1.2m").mkdir()
+    assert data.find_scenario_dir(tmp_path, "1_Lyngen", "A") == merged / "A_80-60_prox0_rel1.2m"
+    assert not data.is_flat_scenario(data.find_scenario_dir(tmp_path, "1_Lyngen", "A"))
+
+
+def test_a_file_named_like_a_scenario_is_not_a_scenario_folder(tmp_path):
+    (tmp_path / "R" / "merged").mkdir(parents=True)
+    (tmp_path / "R" / "merged" / "A_notes.txt").touch()
+    assert data.find_scenario_dir(tmp_path, "R", "A") is None
+
+
+def test_discover_scenarios_from_folders_and_flat_runs(tmp_path):
+    make_flat(tmp_path, region="1_Lyngen", scenario_id="A")
+    make_flat(tmp_path, region="2_Tromso", scenario_id=None, params="75-55_prox150_rel2_3m")
+    campaign = tmp_path / "3_Other" / "merged"
+    for name in ("B_80-60_prox0_rel1.8m", "C_80-60_prox100_rel2.3m", "risk_assessment", "80-60_0__rel1.0m"):
+        (campaign / name).mkdir(parents=True)
+    found = data.discover_scenarios(tmp_path, ["1_Lyngen", "2_Tromso", "3_Other", "9_missing"])
+    assert list(found) == ["A", "B", "C", data.FLAT_NO_ID]
+    assert found["A"] == "80-60, prox0, rel1.2m"
+    assert found["B"] == "80-60, prox0, rel1.8m"
+    assert found[data.FLAT_NO_ID].startswith("single run without scenario id") and "75-55, prox150, rel2.3m" in found[data.FLAT_NO_ID]
+
+
+def test_discover_scenarios_for_no_regions(tmp_path):
+    assert data.discover_scenarios(tmp_path, []) == {}
+
+
+def test_find_file_works_in_a_flat_folder(tmp_path):
+    merged = make_flat(tmp_path, scenario_id="A")
+    assert data.find_file(merged, "tracks_*.shp").name.startswith("tracks_1_Lyngen_A_")
+    assert data.find_file(merged, "pra_*.shp").name.startswith("pra_1_Lyngen_A_")          # not pra_binary
+    assert data.find_file(merged / "risk_assessment", "risk_*.shp").name.startswith("risk_1_Lyngen_A_")

@@ -9,6 +9,11 @@ Defaults can be overridden without editing code:
 
 optimized_base is where tools/optimize_results.py (pipeline repository) writes the fast
 copies; it defaults to '<results_base>_optimized'. An empty value switches them off.
+
+"sources" are the data folders the tools can read from, selectable in the tool dialogs
+(next to "Other folder..."): the standard results folder plus, by default, the ALARM2.2 test
+runs. Add your own with  "sources": {"My run": "D:\\ALARM\\run1"}; an empty path removes a
+default source.
 """
 
 import json
@@ -26,6 +31,14 @@ DEFAULT_SCENARIOS = {
     'E': '75-55, prox150, rel2.3m',
 }
 
+# Name of the source that is always the results folder (results_base)
+STANDARD_SOURCE = "Standard results"
+
+# Further data folders offered in the dialogs
+DEFAULT_EXTRA_SOURCES = {
+    'ALARM2.2': r"L:\ALARM\ALARM2.2",
+}
+
 CONFIG_FILENAME = "alarm_tools_config.json"
 
 
@@ -35,7 +48,8 @@ def config_path():
 
 
 def load_config(path=None, environ=None):
-    """Return {'results_base': Path, 'optimized_base': Path or None, 'scenarios': dict}.
+    """Return {'results_base': Path, 'optimized_base': Path or None, 'scenarios': dict,
+    'sources': {name: Path}}  (the first source is the standard results folder).
 
     Precedence: environment variable > JSON file > defaults. A broken JSON file raises
     ValueError with the file name, so the problem is visible instead of silently ignored.
@@ -44,6 +58,7 @@ def load_config(path=None, environ=None):
     results_base = DEFAULT_RESULTS_BASE
     optimized_base = None  # None: derived from results_base below
     scenarios = dict(DEFAULT_SCENARIOS)
+    extra_sources = dict(DEFAULT_EXTRA_SOURCES)
 
     cfg_file = Path(path) if path else config_path()
     if cfg_file.exists():
@@ -57,6 +72,11 @@ def load_config(path=None, environ=None):
             optimized_base = data["optimized_base"] or ""
         if data.get("scenarios"):
             scenarios = {str(k): str(v) for k, v in data["scenarios"].items()}
+        for name, folder in (data.get("sources") or {}).items():
+            if folder:
+                extra_sources[str(name)] = str(folder)
+            else:
+                extra_sources.pop(str(name), None)
 
     if environ.get("ALARM_RESULTS_BASE"):
         results_base = environ["ALARM_RESULTS_BASE"]
@@ -66,6 +86,9 @@ def load_config(path=None, environ=None):
     results_base = Path(results_base)
     if optimized_base is None:
         optimized_base = results_base.with_name(results_base.name + "_optimized")
+    sources = {STANDARD_SOURCE: results_base}
+    sources.update({name: Path(folder) for name, folder in extra_sources.items() if name != STANDARD_SOURCE})
     return {'results_base': results_base,
             'optimized_base': Path(optimized_base) if optimized_base else None,
-            'scenarios': scenarios}
+            'scenarios': scenarios,
+            'sources': sources}
