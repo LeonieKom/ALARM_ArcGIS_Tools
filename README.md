@@ -46,14 +46,16 @@ For permanent access:
 Loads data for a specific region and scenario with automatic symbology.
 
 **Parameters:**
+- **Data Source**: where the data come from: the standard results (`L:\ALARM\Results`), the **ALARM2.2** test runs (`L:\ALARM\ALARM2.2`), or **Other folder...** (then choose the **Data Folder**, the one that contains the region folders). The region and scenario lists follow the choice. More sources can be added in the config (see [Configuration](#configuration)).
 - **Regions**: one or several regions (e.g., Vest_Finnmark, Nord_Troms)
-- **Scenarios**: one or several scenarios (A, B, C, D, E)
+- **Scenarios**: one or several scenarios (A, B, C, D, E). For other data sources the list shows what the selected regions contain; a single-scenario run without scenario id appears as `single`.
   - Every selected region is combined with every selected scenario; each combination gets its own group layer. A combination without data is skipped with a warning.
 - **Data Types**: Choose which layers to load (PPR Raster, PFV Raster, PFT Raster, Tracks, PRAs, Risk Assessment). PFV/PFT use the `.lyrx` next to the raster.
 - **Add to Group Layer**: Organize layers in a group (default: Yes)
 
 **What it does:**
-- Finds data in `L:\ALARM\Results\{region}\merged\{scenario}\`
+- Finds data in `<data folder>\{region}\merged\{scenario}\` (or directly in `merged\` for a single-scenario run, see [Data Structure](#data-structure))
+- Layers and groups from a data source other than the standard results carry its name, e.g. `1_Lyngen - Scenario single [ALARM2_2]`, so two sources can be loaded side by side
 - Loads selected layers into current map
 - Applies standard ALARM symbology automatically
 - Loads from the **optimized copies** in `L:\ALARM\Results_optimized\` when they are up to date (see [Optimized copies](#optimized-copies)); otherwise from the original files
@@ -168,7 +170,7 @@ Filename: high_risk_buildings.shp
 Compares the scenarios of one region side by side with **one shared filter**. It does not need loaded layers; the attribute tables are read directly from the result files.
 
 **Parameters:**
-- **Region** and **Scenarios to Compare** (default: all five)
+- **Data Source** (and **Data Folder**), **Region** and **Scenarios to Compare** (default: all scenarios the source has for the region)
 - The same criteria as in *Filter Layers*: elevation, aspect (cardinal directions or degree range), building safety class, minimum max PPR
 - **Output Directory** and **Report Format** (HTML, CSV or both)
 
@@ -236,6 +238,18 @@ L:\ALARM\Results\
 └── ...
 ```
 
+**Single-scenario runs** (pipeline quick settings, e.g. the `ALARM2.2` test runs) have no scenario folders: all files are written directly into `merged\`, and the risk assessment shapefile is named like its tables:
+
+```
+L:\ALARM\ALARM2.2\1_Lyngen\merged\
+├── ppr_1_Lyngen_80-60_prox0_rel1_2m_max.tif            (also ..._max_clipped.tif: cut to the region polygon, not loaded)
+├── tracks_1_Lyngen_80-60_prox0_rel1_2m.shp
+├── pra_1_Lyngen_80-60_prox0_rel1_2m.shp
+└── risk_assessment\risk_assessment_1_Lyngen_80-60_prox0_rel1_2m.shp
+```
+
+The file names carry the scenario id only if one was set (`..._1_Lyngen_A_80-60_...`); without it the toolbox calls the run `single`. Where a scenario folder and flat files both exist, the folder wins.
+
 Note on file names: newer pipeline runs write result files without dots (`..._rel2_3m.shp`, folder names keep them), because ArcPy cannot resolve shapefile paths containing a dot. Older results still use `rel2.3m` in file names. The toolbox handles both (it loads files via map layers and finds them with wildcards).
 
 ## Configuration
@@ -244,6 +258,12 @@ By default the toolbox reads the results from `L:\ALARM\Results` and knows scena
 
 - copy `alarm_tools_config.example.json` to `alarm_tools_config.json` (next to `ALARM_Tools.pyt`) and edit it, or
 - set the environment variable `ALARM_RESULTS_BASE`.
+
+The data sources offered in the tools ("Data Source") are the standard results plus `ALARM2.2`; add your own or remove one in the same file (an empty path removes a default source):
+
+```json
+"sources": {"My run": "D:\\ALARM\\run1", "ALARM2.2": ""}
+```
 
 The environment variable wins over the JSON file, which wins over the defaults. A broken JSON file is reported with its file name. `alarm_tools_config.json` is not tracked by git.
 
@@ -283,7 +303,8 @@ Run the tests with ArcGIS Pro's Python:
 "C:\Program Files\ArcGIS\Pro\bin\Python\Scripts\propy.bat" -m pytest tests
 ```
 
-- Without anything else, 111 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- Without anything else, 129 tests run that do not need arcpy or the results (the SQL built for the layers is checked against the Python filter logic with sqlite).
+- `tests/test_arcpy_sources.py` (data source switch, single-scenario runs) needs only arcpy and a project file (`ALARM_TEST_APRX`): it creates tiny shapefiles in the layout of a single-scenario run. Two of its tests also use the real `L:\ALARM\ALARM2.2` folder when it is reachable.
 - The integration tests (loading, filtering, report, export, comparison) additionally need the results on `L:` and a project file with a map: set `ALARM_TEST_APRX` to any `.aprx`; it is copied to a temporary folder. Optional: `ALARM_TEST_REGION` (default `02_Vest_Finnmark`) and `ALARM_TEST_SCENARIO` (default `D`). They take about three minutes for a large region, mostly the first PRA conversion.
 - If optimized copies of that scenario exist, the integration tests load from them. Run them a second time with `ALARM_OPTIMIZED_BASE` set to an empty value to cover loading from the originals.
 - On GitHub, `.github/workflows/tests.yml` runs the tests without arcpy on every push (Windows and Linux, Python 3.9 and 3.11).

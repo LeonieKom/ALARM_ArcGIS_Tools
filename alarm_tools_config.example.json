@@ -1,6 +1,9 @@
 {
     "results_base": "L:\\ALARM\\Results",
     "optimized_base": "L:\\ALARM\\Results_optimized",
+    "sources": {
+        "ALARM2.2": "L:\\ALARM\\ALARM2.2"
+    },
     "scenarios": {
         "A": "80-60, prox0, rel1.2m",
         "B": "80-60, prox0, rel1.8m",
