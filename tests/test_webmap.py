@@ -4,12 +4,10 @@ import re
 from alarm_core import report, webmap
 
 
-def test_ppr_colors_follow_the_classes():
-    assert webmap.ppr_color(None) == "#ffb3d9"
-    assert webmap.ppr_color(24.9) == "#ffb3d9"
-    assert webmap.ppr_color(25) == "#ff66b3"
-    assert webmap.ppr_color(199) == "#cc0066"
-    assert webmap.ppr_color(5000) == "#990050"
+def test_all_buildings_are_bright_red():
+    p = webmap.build_payload(buildings())
+    assert {f['properties']['color'] for f in p['features']} == {"#ff0000"}   # points and outlines
+    assert p['legend'] == [["#ff0000", "Exposed building (click for its values)"]]
 
 
 def test_close_buildings_form_one_area_far_ones_another():
@@ -42,7 +40,7 @@ def test_payload_has_points_outlines_and_area_summaries():
     points = [f for f in p['features'] if not f['properties'].get('outline')]
     outlines = [f for f in p['features'] if f['properties'].get('outline')]
     assert len(points) == 3 and len(outlines) == 1
-    assert points[1]['properties']['color'] == "#cc0066" and points[1]['properties']['area'] == 1
+    assert points[1]['properties']['area'] == 1
     assert p['areas'][0] == {'n': 1, 'name': None, 'buildings': 2, 'max_ppr': 120.0,
                              'classes': {'S2': 1, 'S3': 1}, 'bounds': [18.95, 69.65, 18.952, 69.65]}
     assert p['areas'][1]['classes'] == {'Unknown': 1} and p['areas'][1]['max_ppr'] is None

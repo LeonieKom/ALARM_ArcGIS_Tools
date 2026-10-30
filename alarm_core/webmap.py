@@ -17,9 +17,8 @@ LEAFLET_JS = f"https://unpkg.com/leaflet@{LEAFLET_VERSION}/dist/leaflet.js"
 KARTVERKET_TILES = "https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png"
 OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
-# max_ppr classes and colours, as in the Risk Assessment layer symbology
-PPR_COLORS = [(25, "#ffb3d9", "0-25 kPa"), (50, "#ff66b3", "25-50 kPa"), (100, "#ff0080", "50-100 kPa"),
-              (200, "#cc0066", "100-200 kPa"), (None, "#990050", "> 200 kPa")]
+# all exposed buildings in bright red (their values are in the popup and the building table)
+BUILDING_COLOR = "#ff0000"
 MAX_SMALL_MAPS = 12
 
 # Background layers: very light blue tracks, PRAs as thin black outlines, municipality boundary
@@ -27,13 +26,6 @@ STYLE_TRACKS = {"color": "#9ecae1", "weight": 0.5, "fillColor": "#c6dbef", "fill
 STYLE_PRAS = {"color": "#000000", "weight": 1, "opacity": 0.55, "fill": False}
 STYLE_BOUNDARY = {"color": "#8b0000", "weight": 2.5, "dashArray": "6 4", "fill": False}
 
-
-def ppr_color(value):
-    value = 0.0 if value is None else value
-    for upper, color, _ in PPR_COLORS:
-        if upper is None or value < upper:
-            return color
-    return PPR_COLORS[-1][1]
 
 
 def _meters(lon, lat, lat0):
@@ -167,7 +159,7 @@ def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=
     features = []
     for i, b in enumerate(buildings):
         props = dict(b['props'])
-        props['color'] = ppr_color(props.get('max_ppr'))
+        props['color'] = BUILDING_COLOR
         props['area'] = area_of.get(i)
         features.append({'type': 'Feature', 'properties': props,
                          'geometry': {'type': 'Point', 'coordinates': _round_coords([b['lon'], b['lat']])}})
@@ -180,7 +172,7 @@ def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=
     return {'type': 'FeatureCollection', 'features': features,
             'areas': [{k: s.get(k) for k in ('n', 'name', 'buildings', 'max_ppr', 'classes', 'bounds')}
                       for s in summaries],
-            'legend': [[color, text] for _, color, text in PPR_COLORS],
+            'legend': [[BUILDING_COLOR, "Exposed building (click for its values)"]],
             'context': {k: v for k, v in context.items() if v}}
 
 
@@ -291,7 +283,7 @@ def map_section(payload, title="Affected buildings"):
                 filter: function (f) {{ return !f.properties.outline; }},
                 pointToLayer: function (f, ll) {{
                     return L.circleMarker(ll, {{radius: 5, color: "#333", weight: 1,
-                                               fillColor: f.properties.color, fillOpacity: 0.9}});
+                                               fillColor: f.properties.color, fillOpacity: 1}});
                 }},
                 onEachFeature: function (f, layer) {{
                     var p = f.properties, rows = [];
