@@ -231,14 +231,25 @@ def _numbers(text):
     return out
 
 
-def building_row(record):
+def building_row(record, problem=None):
     """Aspects and elevation text of a building's release areas.
 
-    Uses the lists pra_asplst / pra_elvls of the risk layer (all PRAs reaching the building),
-    else pra_aspct / pra_elev (the main PRA). Elevations are rounded to 10 m.
+    Uses the lists pra_asplst / pra_elvls of the risk layer (all PRAs reaching the building,
+    pairwise), else pra_aspct / pra_elev (the main PRA). With problem (aspects, elev_min,
+    elev_max) only the release areas inside it are listed, as in the workshop tables
+    (falls back to all when none or the lists do not pair up). Elevations are rounded to 10 m.
     """
+    raw_aspects = [a.strip().upper() for a in str(record.get('pra_asplst') or "").split(",") if a.strip()]
+    raw_elevs = [p.strip() for p in str(record.get('pra_elvls') or "").split(",") if p.strip()]
     aspects = symbols.split_aspects(record.get('pra_asplst')) or symbols.split_aspects(record.get('pra_aspct'))
     elevations = _numbers(record.get('pra_elvls')) or _numbers(record.get('pra_elev'))
+    if problem and raw_aspects and len(raw_aspects) == len(raw_elevs):
+        wanted, lo, hi = problem
+        pairs = [(a, e) for a, e in zip(raw_aspects, _numbers(",".join(raw_elevs)))
+                 if a in wanted and (lo is None or e >= lo) and (hi is None or e <= hi)]
+        if pairs:
+            aspects = symbols.aspects_in_order(a for a, _ in pairs)
+            elevations = [e for _, e in pairs]
     if elevations:
         lo, hi = round(min(elevations), -1), round(max(elevations), -1)
         elevation = f"{lo:.0f} m" if lo == hi else f"{lo:.0f}-{hi:.0f} m"
@@ -247,18 +258,19 @@ def building_row(record):
     return aspects, elevation
 
 
-def buildings_table(records, area_names=None, hide_classes=("S1",)):
+def buildings_table(records, area_names=None, hide_classes=("S1",), problem=None):
     """HTML table of the buildings, highest max PPR first.
 
     records: dicts with saf_class, max_ppr, address, area (number) and the PRA fields.
-    Buildings of hide_classes are listed but hidden until 'show' is ticked.
+    Buildings of hide_classes are listed but hidden until 'show' is ticked. problem
+    (aspects, elev_min, elev_max) limits the release areas listed (see building_row).
     """
     area_names = area_names or {}
     rows = sorted(records, key=lambda r: (r.get('max_ppr') is None, -(r.get('max_ppr') or 0.0)))
     symbols_used, body = {}, []
     hidden = rank = 0
     for r in rows:
-        aspects, elevation = building_row(r)
+        aspects, elevation = building_row(r, problem)
         key = "-".join(aspects) or "none"
         symbols_used[key] = aspects
         area = r.get('area')
@@ -376,7 +388,7 @@ def write_html(path, stats, context, generated=None, map_html=None, head_extra=N
         fh.write("".join(parts))
 
 
-def write_csv(path, stats, context, generated=None, buildings=None, area_names=None):
+def write_csv(path, stats, context, generated=None, buildings=None, area_names=None, problem=None):
     """The report as CSV; buildings (records as for buildings_table) adds the building list."""
     generated = generated or datetime.now()
     s = summary(stats)
@@ -407,7 +419,7 @@ def write_csv(path, stats, context, generated=None, buildings=None, area_names=N
                              'Max PPR [kPa]', 'Aspect of release area', 'Elevation of release area'])
             ordered = sorted(buildings, key=lambda r: (r.get('max_ppr') is None, -(r.get('max_ppr') or 0.0)))
             for rank, r in enumerate(ordered, start=1):
-                aspects, elevation = building_row(r)
+                aspects, elevation = building_row(r, problem)
                 writer.writerow([rank, r.get('bld_id'), r.get('saf_class') or "", r.get('address') or "",
                                  r.get('area') or "", area_names.get(r.get('area'), ""),
                                  _fmt(r.get('max_ppr'), 1), ", ".join(aspects), elevation])

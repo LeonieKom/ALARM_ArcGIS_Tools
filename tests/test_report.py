@@ -194,3 +194,12 @@ def test_report_html_order_and_csv_building_list(tmp_path):
     start = next(i for i, l in enumerate(lines) if l.startswith("BUILDINGS,"))
     assert lines[start + 1] == "1,1,S1,\"Storgata 1, Tromsø\",1,Kårvik,90.0,N,400 m"
     assert len(lines) - start - 1 == 3                                 # all classes in the CSV
+
+
+def test_with_a_filter_only_the_release_areas_inside_it_are_listed():
+    r = {'pra_asplst': "N, NE, S", 'pra_elvls': "240, 400, 900"}
+    assert report.building_row(r, (["N", "S"], None, None)) == (["N", "S"], "240-900 m")
+    assert report.building_row(r, (["N", "NE", "S"], 300.0, 800.0)) == (["NE"], "400 m")
+    assert report.building_row(r, (["W"], None, None)) == (["N", "NE", "S"], "240-900 m")   # none inside: all
+    odd = {'pra_asplst': "N, NE", 'pra_elvls': "240"}                                      # lists do not pair
+    assert report.building_row(odd, (["N"], None, None)) == (["N", "NE"], "240 m")

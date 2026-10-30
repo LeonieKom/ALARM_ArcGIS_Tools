@@ -2013,7 +2013,7 @@ class GenerateReport(object):
         if report_format in ["HTML", "Both"]:
             html_path = os.path.join(output_dir, base + ".html")
             scenario_html = self._scenario_html(layers, records)
-            buildings_html = _report.buildings_table(records, area_names)
+            buildings_html = _report.buildings_table(records, area_names, problem=self._problem(layers))
             if include_map:
                 payload = self._map_payload(layers, buildings, areas)
                 context_info = ", ".join(f"{len(v['features'])} {k}" for k, v in payload['context'].items())
@@ -2028,7 +2028,8 @@ class GenerateReport(object):
             arcpy.AddMessage(f"HTML report: {html_path}")
         if report_format in ["CSV", "Both"]:
             csv_path = os.path.join(output_dir, base + ".csv")
-            _report.write_csv(csv_path, stats, context, buildings=records, area_names=area_names)
+            _report.write_csv(csv_path, stats, context, buildings=records, area_names=area_names,
+                              problem=self._problem(layers))
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return
 
@@ -2085,19 +2086,24 @@ class GenerateReport(object):
             params = next((p for p in map(_report.scenario_params, texts) if p), None)
             sid = next((s for s in map(_report.scenario_id, texts) if s), None)
             if sid is None:
-                m = re.match(r"^risk - .+ - (\S+?)(?: - .*)?$", layer.name)   # municipality mode names
+                # municipality mode: 'risk - <names> - <scenario>[ - <source>]'
+                m = re.match(r"^risk - .+? - (\S+?)(?: - .*)?$", layer.name)
                 sid = m.group(1) if m else None
             if params is None and sid in self._scenario_names():
                 params = _report.scenario_params(self._scenario_names()[sid])
-            if sid == _data.FLAT_NO_ID:
-                sid = None
-            label = sid or (f"{params['t_high']}-{params['t_low']}" if params else layer.name)
+            if sid == _data.FLAT_NO_ID or (sid is None and params):
+                label = "single run"
+            else:
+                label = sid or layer.name
             if (label, str(params)) not in seen:
                 seen.add((label, str(params)))
                 scenarios.append((label, params))
-        parsed = [_filters.parse_description(_filter_name(layer) or "") for layer in layers]
-        aspects, elev_min, elev_max = _report.problem_from_filters(parsed)
-        return _report.scenario_section(scenarios, aspects, elev_min, elev_max)
+        return _report.scenario_section(scenarios, *self._problem(layers))
+
+    def _problem(self, layers):
+        """(aspects, elev_min, elev_max) of the avalanche problem, from the layers' filters."""
+        return _report.problem_from_filters([_filters.parse_description(_filter_name(layer) or "")
+                                             for layer in layers])
 
     def _scenario_names(self):
         try:
