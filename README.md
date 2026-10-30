@@ -132,8 +132,12 @@ Generate a detailed statistics report for one or several Risk Assessment layers.
 - **Output Directory**: Where to save the report
 - **Report Format**: HTML, CSV, or Both
 - **Include map**: an interactive map in the HTML report (default: yes)
+- **Look up addresses and area names**: from Kartverket's open APIs (ws.geonorge.no, needs internet; default: yes). The answers are cached in `%LOCALAPPDATA%\ALARM_Tools\kartverket`, so a building or area is only looked up once. Without internet the report is written without addresses
 
 **What it does:**
+- **Scenario** at the top: the scenario parameters (PRA thresholds, proximity, release thickness; from the file names, or from the scenario list in the config) and the **avalanche problem as in Varsom**: the aspect rose and the elevation triangle, red where the release areas are. They follow the layer's filter (Filter Layers): no filter = all aspects red, all elevations
+- **Exposed buildings by pressure**: a table of the buildings, highest max PPR first, with nearest address ("near" = more than 30 m away), area, max PPR, aspect of the release areas (with a small rose) and their elevation (from `pra_asplst` / `pra_elvls`: all PRAs reaching the building). S1 buildings are hidden until ticked. The CSV report has the same list with all buildings. Addresses are looked up for at most 2000 buildings (S3, S2 first)
+- **Area names**: each affected area is named after the nearest settlement-like place name (Kartverket place names), else its postal place; equal names get the most common street, then II, III. The name is shown under each small map ("Area 1: Name"), in the priority table and in the building table
 - Analyzes all features (or filtered subset)
 - Generates statistics:
   - Total building count

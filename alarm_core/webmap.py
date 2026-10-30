@@ -115,13 +115,14 @@ def _priority(summary):
     return (ppr is None, -(ppr or 0.0), -summary['buildings'])
 
 
-def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=500.0):
-    """Data for the map.
+def areas_for(buildings, max_gap_m=500.0):
+    """Affected areas of the buildings, numbered in priority order (highest max PPR first).
 
     Args:
-        buildings: [{'lon', 'lat', 'geometry' (GeoJSON or None), 'props'}] in WGS84
-        tracks, pras, boundaries: optional background features [{'geometry', 'props'}] in WGS84
-    The affected areas are numbered in priority order (highest max PPR first).
+        buildings: [{'lon', 'lat', 'props'}] in WGS84
+    Returns:
+        [{'n', 'members' (indices into buildings), 'buildings', 'max_ppr', 'classes', 'bounds',
+        'lon', 'lat' (mean position), 'name' (None; set by the caller)}]
     """
     areas = cluster_areas([(b['lon'], b['lat']) for b in buildings], max_gap_m)
     summaries = []
@@ -133,13 +134,35 @@ def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=
             classes[m.get('saf_class') or "Unknown"] = classes.get(m.get('saf_class') or "Unknown", 0) + 1
         summaries.append({'members': area['members'], 'buildings': len(members),
                           'max_ppr': max(pprs) if pprs else None, 'classes': dict(sorted(classes.items())),
-                          'bounds': _round_coords(list(area['bounds']))})
+                          'bounds': _round_coords(list(area['bounds'])),
+                          'lon': sum(buildings[i]['lon'] for i in area['members']) / len(members),
+                          'lat': sum(buildings[i]['lat'] for i in area['members']) / len(members),
+                          'name': None})
     summaries.sort(key=_priority)
-    area_of = {}
     for n, summary in enumerate(summaries, start=1):
         summary['n'] = n
-        for i in summary.pop('members'):
-            area_of[i] = n
+    return summaries
+
+
+def area_label(area):
+    """'Area 3: Tønsvik' (or 'Area 3' without a name)."""
+    return f"Area {area['n']}: {area['name']}" if area.get('name') else f"Area {area['n']}"
+
+
+def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=500.0, areas=None):
+    """Data for the map.
+
+    Args:
+        buildings: [{'lon', 'lat', 'geometry' (GeoJSON or None), 'props'}] in WGS84
+        tracks, pras, boundaries: optional background features [{'geometry', 'props'}] in WGS84
+        areas: the areas from areas_for (e.g. with names); computed when not given
+    The affected areas are numbered in priority order (highest max PPR first).
+    """
+    summaries = areas if areas is not None else areas_for(buildings, max_gap_m)
+    area_of = {}
+    for summary in summaries:
+        for i in summary['members']:
+            area_of[i] = summary['n']
 
     features = []
     for i, b in enumerate(buildings):
@@ -155,7 +178,8 @@ def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=
     context = {key: _collection(items) for key, items in
                (('tracks', tracks), ('pras', pras), ('boundaries', boundaries))}
     return {'type': 'FeatureCollection', 'features': features,
-            'areas': [{k: s[k] for k in ('n', 'buildings', 'max_ppr', 'classes', 'bounds')} for s in summaries],
+            'areas': [{k: s.get(k) for k in ('n', 'name', 'buildings', 'max_ppr', 'classes', 'bounds')}
+                      for s in summaries],
             'legend': [[color, text] for _, color, text in PPR_COLORS],
             'context': {k: v for k, v in context.items() if v}}
 
@@ -203,11 +227,12 @@ def map_section(payload, title="Affected buildings"):
     for a in areas:
         classes = ", ".join(f"{escape(str(k))}: {v}" for k, v in a['classes'].items())
         ppr = "-" if a['max_ppr'] is None else f"{a['max_ppr']:.1f}"
-        rows.append(f'<tr><td>{a["n"]}</td><td>{ppr}</td><td>{a["buildings"]}</td><td>{classes}</td>'
+        rows.append(f'<tr><td>{a["n"]}</td><td>{escape(a.get("name") or "")}</td><td>{ppr}</td>'
+                    f'<td>{a["buildings"]}</td><td>{classes}</td>'
                     f'<td><button type="button" onclick="alarmZoom({a["n"]})">Zoom</button></td></tr>')
     smalls = "".join(
         f'<div class="alarm-small"><div class="m" id="alarm-small-{a["n"]}"></div>'
-        f'<div>Area {a["n"]}: {a["buildings"]} buildings'
+        f'<div><strong>{escape(area_label(a))}</strong><br>{a["buildings"]} buildings'
         f'{"" if a["max_ppr"] is None else ", max " + format(a["max_ppr"], ".1f") + " kPa"}</div></div>'
         for a in areas[:MAX_SMALL_MAPS])
     more = (f"<p>{len(areas) - MAX_SMALL_MAPS} further areas are listed above (Zoom).</p>"
@@ -220,7 +245,7 @@ def map_section(payload, title="Affected buildings"):
     <h3>Affected areas (priority: highest max PPR first)</h3>
     <p>Buildings closer than 500 m to each other form one area. Click a building for its values.</p>
     <table class="alarm-areas">
-        <tr><th>Area</th><th>Highest max PPR [kPa]</th><th>Buildings</th><th>Safety classes</th><th></th></tr>
+        <tr><th>Area</th><th>Name</th><th>Highest max PPR [kPa]</th><th>Buildings</th><th>Safety classes</th><th></th></tr>
         {"".join(rows)}
     </table>
     <h3>Areas in detail</h3>
@@ -233,6 +258,11 @@ def map_section(payload, title="Affected buildings"):
         var data = JSON.parse(document.getElementById("alarm-data").textContent);
         var styles = {styles};
         var kv = "{KARTVERKET_TILES}", osm = "{OSM_TILES}";
+        function esc(v) {{
+            return String(v).replace(/[&<>"]/g, function (c) {{
+                return {{"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}}[c];
+            }});
+        }}
         function background() {{
             return L.tileLayer(kv, {{maxZoom: 18, attribution: "&copy; Kartverket"}});
         }}
@@ -265,10 +295,13 @@ def map_section(payload, title="Affected buildings"):
                 }},
                 onEachFeature: function (f, layer) {{
                     var p = f.properties, rows = [];
-                    ["bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct", "source"].forEach(function (k) {{
-                        if (p[k] !== undefined && p[k] !== null) {{ rows.push("<b>" + k + "</b>: " + p[k]); }}
+                    ["address", "bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct", "source"].forEach(function (k) {{
+                        if (p[k] !== undefined && p[k] !== null && p[k] !== "") {{ rows.push("<b>" + k + "</b>: " + esc(p[k])); }}
                     }});
-                    if (p.area) {{ rows.push("<b>area</b>: " + p.area); }}
+                    if (p.area) {{
+                        var a = data.areas[p.area - 1];
+                        rows.push("<b>area</b>: " + p.area + (a && a.name ? " " + esc(a.name) : ""));
+                    }}
                     layer.bindPopup(rows.join("<br>"));
                 }}
             }}).addTo(map);

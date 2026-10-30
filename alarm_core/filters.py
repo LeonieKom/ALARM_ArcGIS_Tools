@@ -5,6 +5,8 @@ with the Python predicates. Both use the same aspect boundaries, and the tests c
 they agree.
 """
 
+import re
+
 # Aspect classes as degree ranges [from, to)
 CARDINAL_RANGES = {
     'N': [(337.5, 360), (0, 22.5)],
@@ -333,6 +335,45 @@ def describe(criteria):
     if criteria['min_max_ppr'] is not None:
         parts.append(f"PPR >= {criteria['min_max_ppr']:g} kPa")
     return "; ".join(parts) if parts else "no criteria"
+
+
+def parse_description(text):
+    """Elevation and aspects of a filter name written by Filter Layers (see describe).
+
+    'ALARM: Kommune Tromsø; >= 300 m; N/NE + 300-900 m' -> {'elev_min': 300, 'elev_max': 900,
+    'aspects': ['N', 'NE']}. Refined filters (parts joined by ' + ') all apply, so their limits
+    are combined. aspects is None when no direction filter is set.
+    """
+    result = {'elev_min': None, 'elev_max': None, 'aspects': None}
+    if not text:
+        return result
+    text = text[len("ALARM:"):] if text.startswith("ALARM:") else text
+    number = r"(-?\d+(?:\.\d+)?)"
+    for step in text.split(" + "):
+        for part in (p.strip() for p in step.split(";")):
+            if not part or part.startswith("Kommune "):
+                continue
+            lo = hi = None
+            m = re.fullmatch(number + "-" + number + " m", part)
+            if m:
+                lo, hi = float(m.group(1)), float(m.group(2))
+            m = re.fullmatch(">= " + number + " m", part)
+            if m:
+                lo = float(m.group(1))
+            m = re.fullmatch("<= " + number + " m", part)
+            if m:
+                hi = float(m.group(1))
+            if lo is not None:
+                result['elev_min'] = lo if result['elev_min'] is None else max(result['elev_min'], lo)
+            if hi is not None:
+                result['elev_max'] = hi if result['elev_max'] is None else min(result['elev_max'], hi)
+            directions = part.split("/")
+            if all(d in CARDINAL_RANGES for d in directions):
+                chosen = set(directions)
+                if result['aspects'] is not None:
+                    chosen &= set(result['aspects'])
+                result['aspects'] = [d for d in CARDINAL_RANGES if d in chosen]
+    return result
 
 
 def combine_refine(previous_query, new_query):

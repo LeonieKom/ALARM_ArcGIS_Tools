@@ -704,6 +704,54 @@ def test_report_on_a_municipality_load_has_its_background(kommune_env, two_regio
     assert data['areas'][0]['max_ppr'] == 60.0
 
 
+def test_report_has_addresses_area_names_scenario_and_building_table(kommune_env, two_region_run, tmp_path,
+                                                                     monkeypatch):
+    env = kommune_env
+    asked = []
+
+    def kartverket(url, params, timeout=20):
+        asked.append(url)
+        if url == env.mod._places.ADDRESS_API:
+            return {'adresser': [{'adressetekst': "Testvegen 1", 'poststed': "TESTBY", 'meterDistanseTilPunkt': 5.0}]}
+        return {'navn': [{'navneobjekttype': "Grend", 'meterFraPunkt': 1, 'stedsnavn': [{'skrivemåte': "Testgrenda"}]}]}
+    monkeypatch.setattr(env.mod._places, "get_json", kartverket)
+    monkeypatch.setattr(env.mod, "_PLACES_CACHE", tmp_path / "cache")
+    risk = current(env, "risk - Testkommune - A - run_k")
+    _set = env.mod._set_filter
+    _set(risk, "pra_elev >= 0", "ALARM: >= 150 m; S/SW")              # as Filter Layers names it
+    try:
+        env.mod.GenerateReport().execute([P([risk]), P(str(tmp_path)), P("Both"), P(True), P(True)], None)
+    finally:
+        _set(risk, "")
+    html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+    assert "Scenario A:</strong> PRA thresholds 80 / 60 %, proximity 0 m, release thickness 1.2 m" in html
+    assert "above 150 m" in html and "S, SW" in html                  # avalanche problem from the filter
+    assert "Testvegen 1, Testby" in html                               # building table
+    assert "<strong>Area 1: Testgrenda</strong>" in html               # under the small map
+    assert asked.count(env.mod._places.ADDRESS_API) == 3              # one per building
+    csv_text = next(tmp_path.glob("risk_report_*.csv")).read_text(encoding="utf-8")
+    assert "Testgrenda" in csv_text and "Testvegen 1, Testby" in csv_text
+    # second report: everything from the cache
+    asked.clear()
+    (tmp_path / "again").mkdir()
+    env.mod.GenerateReport().execute([P([risk]), P(str(tmp_path / "again")), P("HTML"), P(False), P(True)], None)
+    assert asked == []
+    again = next((tmp_path / "again").glob("*.html")).read_text(encoding="utf-8")
+    assert "Testvegen 1, Testby" in again and "alarm-map" not in again    # table also without the map
+
+
+def test_report_offline_is_written_without_addresses(kommune_env, two_region_run, tmp_path, capfd, monkeypatch):
+    env = kommune_env
+    monkeypatch.setattr(env.mod, "_PLACES_CACHE", tmp_path / "cache")
+    risk = current(env, "risk - Testkommune - A - run_k")
+    capfd.readouterr()
+    env.mod.GenerateReport().execute([P([risk]), P(str(tmp_path)), P("HTML"), P(True), P(True)], None)
+    out = "".join(capfd.readouterr())
+    assert "address lookups failed (no internet?)" in out
+    html = next(tmp_path.glob("risk_report_*.html")).read_text(encoding="utf-8")
+    assert "Exposed buildings by pressure" in html and "all aspects" in html
+
+
 @needs_alarm22
 def test_real_municipality_load_across_two_regions(env, tmp_path, monkeypatch, capfd):
     """Tromsø municipality from the ALARM2.2 runs: found in both regions, cut and merged."""

@@ -113,6 +113,13 @@ def env_context(tmp_path_factory, aprx):
     loader = importlib.machinery.SourceFileLoader("alarm_tools_under_test", str(ROOT / "ALARM_Tools.pyt"))
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(mod)
+    # no requests to Kartverket from the tests: offline unless a test sets mod._places.get_json
+    mod._PLACES_CACHE = work / "kartverket"
+    real_get_json = mod._places.get_json
+
+    def offline(url, params, timeout=20):
+        raise OSError("tests are offline")
+    mod._places.get_json = offline
 
     real = arcpy.mp.ArcGISProject
     raw = real(str(aprx_copy))
@@ -123,3 +130,4 @@ def env_context(tmp_path_factory, aprx):
         yield type("Env", (), {"mod": mod, "map": m, "gdb": gdb, "work": work})
     finally:
         arcpy.mp.ArcGISProject = real
+        mod._places.get_json = real_get_json

@@ -249,3 +249,30 @@ def test_has_any_matches_the_queries():
     for c in NUMERIC_CASES + RISK_CASES:
         restricts = f.numeric_query(c, "e", "a") is not None or f.risk_query(c) is not None
         assert f.has_any(c) == restricts, c
+
+
+# ----------------------------------------------------- reading a filter name back --
+
+def test_parse_description_reads_elevation_and_aspects():
+    p = f.parse_description("ALARM: Kommune Tromsø, Bodø; 300-900 m; N/NE; S2,S3; PPR >= 10 kPa")
+    assert p == {'elev_min': 300.0, 'elev_max': 900.0, 'aspects': ['N', 'NE']}
+    assert f.parse_description("ALARM: >= 400 m") == {'elev_min': 400.0, 'elev_max': None, 'aspects': None}
+    assert f.parse_description("ALARM: <= 250.5 m; S") == {'elev_min': None, 'elev_max': 250.5, 'aspects': ['S']}
+    assert f.parse_description(None) == {'elev_min': None, 'elev_max': None, 'aspects': None}
+
+
+def test_parse_description_combines_refined_filters():
+    p = f.parse_description("ALARM: >= 300 m; N/NE/E + <= 900 m; NE/E/SE + >= 400 m")
+    assert p == {'elev_min': 400.0, 'elev_max': 900.0, 'aspects': ['NE', 'E']}
+
+
+def test_parse_description_ignores_municipality_names_with_slashes():
+    p = f.parse_description("ALARM: Kommune Porsanger/Porsáŋgu/Porsanki; S2")
+    assert p == {'elev_min': None, 'elev_max': None, 'aspects': None}
+
+
+def test_parse_description_round_trips_describe():
+    crit = f.make_criteria(elev_min=300, elev_max=1200, aspect_type=f.ASPECT_CARDINAL,
+                                 cardinal=["W", "SW"], saf_classes=["S3"])
+    p = f.parse_description("ALARM: " + f.describe(crit))
+    assert p == {'elev_min': 300.0, 'elev_max': 1200.0, 'aspects': ['SW', 'W']}

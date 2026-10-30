@@ -43,8 +43,8 @@ def test_payload_has_points_outlines_and_area_summaries():
     outlines = [f for f in p['features'] if f['properties'].get('outline')]
     assert len(points) == 3 and len(outlines) == 1
     assert points[1]['properties']['color'] == "#cc0066" and points[1]['properties']['area'] == 1
-    assert p['areas'][0] == {'n': 1, 'buildings': 2, 'max_ppr': 120.0, 'classes': {'S2': 1, 'S3': 1},
-                             'bounds': [18.95, 69.65, 18.952, 69.65]}
+    assert p['areas'][0] == {'n': 1, 'name': None, 'buildings': 2, 'max_ppr': 120.0,
+                             'classes': {'S2': 1, 'S3': 1}, 'bounds': [18.95, 69.65, 18.952, 69.65]}
     assert p['areas'][1]['classes'] == {'Unknown': 1} and p['areas'][1]['max_ppr'] is None
 
 
@@ -111,6 +111,20 @@ def test_background_layers_are_embedded_with_their_styles():
     assert "Avalanche tracks" in html and "PRAs" in html and "Municipality" in html   # legend
     assert webmap.STYLE_TRACKS["fillColor"] in html and '"fill":false' in html
     assert "L.rectangle" not in html                                 # no boxes around the areas
+
+
+def test_named_areas_are_shown_under_the_small_maps_and_in_the_table():
+    b = buildings()
+    areas = webmap.areas_for(b)
+    assert areas[0]['members'] == [0, 1] and abs(areas[0]['lon'] - 18.951) < 1e-9
+    areas[0]['name'] = "Tønsvik <x>"
+    p = webmap.build_payload(b, areas=areas)
+    assert p['areas'][0]['name'] == "Tønsvik <x>" and 'members' not in p['areas'][0]
+    html = webmap.map_section(p)
+    assert "<strong>Area 1: Tønsvik &lt;x&gt;</strong>" in html      # under the small map
+    assert "<td>Tønsvik &lt;x&gt;</td>" in html                      # priority table
+    assert "<strong>Area 2</strong>" in html                         # no name: just the number
+    assert webmap.area_label({'n': 4, 'name': None}) == "Area 4"
 
 
 def test_without_background_layers_the_context_is_empty():

@@ -38,10 +38,12 @@ import alarm_core.compare as _compare
 import alarm_core.report as _report
 import alarm_core.kommune as _kommune
 import alarm_core.webmap as _webmap
+import alarm_core.symbols as _symbols
+import alarm_core.places as _places
 
 # ArcGIS Pro keeps imported modules for the whole session. Reloading them here makes
 # "Refresh" of the toolbox pick up edits without restarting Pro.
-for _module in (_config, _data, _dbf, _filters, _kommune, _compare, _report, _webmap):
+for _module in (_config, _data, _dbf, _filters, _kommune, _compare, _symbols, _report, _webmap, _places):
     importlib.reload(_module)
 
 
@@ -215,6 +217,8 @@ def _check_source(source, folder, region, scenarios, cfg):
 # boundaries come from the Kartverket dataset (config 'kommune_gdb') and are cached locally
 # per municipality, since reading them over L: can take long.
 _KOMMUNE_CACHE = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()) / "ALARM_Tools" / "kommuner"
+# answers of Kartverket's address and place name APIs (Generate Report)
+_PLACES_CACHE = _KOMMUNE_CACHE.parent / "kartverket"
 
 
 def _municipality_param(display_name="Municipalities (Kommuner)"):
@@ -920,7 +924,7 @@ class LoadALARMData(object):
     def _cut_name(self, kind, sid, sources, numbers):
         """Name of the cached cut-out: changes when a source file or the municipalities change."""
         import hashlib
-        parts = [numbers, kind, sid, self.source_tag]
+        parts = [numbers, kind, sid, self.source_tag, "v2"]   # v2: risk cut-outs have alarm_src
         for region, path in sources:
             try:
                 st = Path(path).stat()
@@ -982,6 +986,10 @@ class LoadALARMData(object):
                     arcpy.conversion.ExportFeatures(name, part)
                 arcpy.management.AddField(part, "alarm_region", "TEXT", field_length=60)
                 arcpy.management.CalculateField(part, "alarm_region", repr(region), "PYTHON3")
+                if kind == "risk":
+                    # the source file name carries the scenario parameters (shown in Generate Report)
+                    arcpy.management.AddField(part, "alarm_src", "TEXT", field_length=200)
+                    arcpy.management.CalculateField(part, "alarm_src", repr(Path(path).name), "PYTHON3")
                 parts.append(part)
             finally:
                 arcpy.management.Delete(name)
@@ -1830,6 +1838,10 @@ class GenerateReport(object):
     MAP_GENERALIZE_M = 5
     MAP_MAX_CONTEXT_FEATURES = 20000
     MAP_FIELDS = ["bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct"]
+    # also read: all PRAs reaching the building (building table), source file (scenario)
+    LIST_FIELDS = ["pra_asplst", "pra_elvls", "alarm_src"]
+    # address lookups per report at most (S3 and S2 first, then by max PPR)
+    MAX_ADDRESS_LOOKUPS = 2000
 
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
@@ -1880,7 +1892,16 @@ class GenerateReport(object):
             direction="Input")
         param3.value = True
 
-        return [param0, param1, param2, param3]
+        # Parameter 4: addresses and area names from Kartverket
+        param4 = arcpy.Parameter(
+            displayName="Look up addresses and area names (Kartverket, needs internet)",
+            name="lookup_places",
+            datatype="GPBoolean",
+            parameterType="Optional",
+            direction="Input")
+        param4.value = True
+
+        return [param0, param1, param2, param3, param4]
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -1930,6 +1951,7 @@ class GenerateReport(object):
         output_dir = parameters[1].valueAsText
         report_format = parameters[2].valueAsText
         include_map = bool(parameters[3].value) if len(parameters) > 3 and parameters[3].value is not None else True
+        lookup = bool(parameters[4].value) if len(parameters) > 4 and parameters[4].value is not None else True
         if not layers:
             arcpy.AddError("None of the chosen layers is a Risk Assessment layer.")
             return
@@ -1947,7 +1969,7 @@ class GenerateReport(object):
                 arcpy.AddWarning(f"  {selected} features are selected in '{layer.name}' - the report only covers "
                                  f"the selection. Clear the selection to report everything the filter shows.")
             try:
-                layer_records = self._read_buildings(layer, with_map, tag=layer.name if len(layers) > 1 else None)
+                layer_records = self._read_buildings(layer, True, tag=layer.name if len(layers) > 1 else None)
             except Exception as e:
                 arcpy.AddError(f"Could not read {', '.join(_report.FIELDS)} from '{layer.name}' - "
                                f"is it a Risk Assessment layer? ({e})")
@@ -1973,24 +1995,115 @@ class GenerateReport(object):
         more = f"_and_{len(layers) - 1}_more" if len(layers) > 1 else ""
         base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layers[0].name}{more}_{timestamp}")
 
+        # affected areas, addresses and area names (for the map, the building table and the CSV)
+        buildings = self._map_buildings(records)
+        areas = _webmap.areas_for(buildings)
+        for area in areas:
+            for i in area['members']:
+                buildings[i]['record']['area'] = area['n']
+        if lookup:
+            self._add_addresses(records)
+            self._name_areas(areas, buildings)
+        for b in buildings:
+            if b['record'].get('address'):
+                b['props']['address'] = b['record']['address']
+        area_names = {a['n']: a['name'] for a in areas if a.get('name')}
+        arcpy.AddMessage(f"{len(buildings)} buildings in {len(areas)} affected areas")
+
         if report_format in ["HTML", "Both"]:
             html_path = os.path.join(output_dir, base + ".html")
+            scenario_html = self._scenario_html(layers, records)
+            buildings_html = _report.buildings_table(records, area_names)
             if include_map:
-                payload = self._map_payload(layers, records)
+                payload = self._map_payload(layers, buildings, areas)
                 context_info = ", ".join(f"{len(v['features'])} {k}" for k, v in payload['context'].items())
-                arcpy.AddMessage(f"Map: {sum(1 for r in records if r.get('lon') is not None)} buildings in "
-                                 f"{len(payload['areas'])} affected areas"
-                                 + (f"; background: {context_info}" if context_info else ""))
+                if context_info:
+                    arcpy.AddMessage(f"Map background: {context_info}")
                 _report.write_html(html_path, stats, context, map_html=_webmap.map_section(payload),
-                                   head_extra=_webmap.head_html())
+                                   head_extra=_webmap.head_html(), scenario_html=scenario_html,
+                                   buildings_html=buildings_html)
             else:
-                _report.write_html(html_path, stats, context)
+                _report.write_html(html_path, stats, context, scenario_html=scenario_html,
+                                   buildings_html=buildings_html)
             arcpy.AddMessage(f"HTML report: {html_path}")
         if report_format in ["CSV", "Both"]:
             csv_path = os.path.join(output_dir, base + ".csv")
-            _report.write_csv(csv_path, stats, context)
+            _report.write_csv(csv_path, stats, context, buildings=records, area_names=area_names)
             arcpy.AddMessage(f"CSV report: {csv_path}")
         return
+
+    # ------------------------------------------------- addresses, areas, scenario --
+
+    def _add_addresses(self, records):
+        """record['address'] from Kartverket (S3 and S2 first; at most MAX_ADDRESS_LOOKUPS)."""
+        order = {"S3": 0, "S2": 1}
+        located = [r for r in records if r.get('lon') is not None]
+        located.sort(key=lambda r: (order.get(r.get('saf_class'), 2), -(r.get('max_ppr') or 0.0)))
+        if len(located) > self.MAX_ADDRESS_LOOKUPS:
+            arcpy.AddWarning(f"Addresses are looked up for the first {self.MAX_ADDRESS_LOOKUPS} of "
+                             f"{len(located)} buildings (S3 and S2 first, highest max PPR first)")
+            located = located[:self.MAX_ADDRESS_LOOKUPS]
+        if not located:
+            return
+        def key(r):
+            return str(r['bld_id']) if r.get('bld_id') not in (None, "") else f"{r['lon']:.6f}_{r['lat']:.6f}"
+        arcpy.AddMessage(f"Looking up addresses (Kartverket) for {len(located)} buildings ...")
+        found, failed = _places.lookup_addresses([(key(r), r['lon'], r['lat']) for r in located],
+                                                 _PLACES_CACHE / "addresses.json")
+        for r in located:
+            entry = found.get(key(r))
+            if entry:
+                r['address'] = _places.address_label(entry) or None
+                r['_address_entry'] = entry
+        if failed:
+            arcpy.AddWarning(f"  {failed} address lookups failed (no internet?) - those buildings have no address")
+
+    def _name_areas(self, areas, buildings):
+        """area['name'] from Kartverket's place names (else postal place / street, as in the workshop tables)."""
+        if not areas:
+            return
+        items = []
+        for a in areas:
+            entries = [buildings[i]['record'].get('_address_entry') for i in a['members']]
+            items.append({'n': a['n'], 'lon': a['lon'], 'lat': a['lat'],
+                          'poststeds': [e['poststed'] for e in entries if e and e.get('poststed')],
+                          'streets': [_places.street_of(e) for e in entries if e]})
+        arcpy.AddMessage(f"Looking up place names (Kartverket) for {len(areas)} areas ...")
+        names, failed = _places.name_areas(items, _PLACES_CACHE / "places.json")
+        for a in areas:
+            a['name'] = names.get(a['n'])
+        if failed:
+            arcpy.AddWarning(f"  {failed} place name lookups failed (no internet?)")
+
+    def _scenario_html(self, layers, records):
+        """Scenario parameters of the risk layers and the avalanche problem from their filters."""
+        scenarios, seen = [], set()
+        for layer in layers:
+            texts = [str(getattr(layer, 'dataSource', "") or ""), layer.name]
+            texts += sorted({r.get('alarm_src') for r in records
+                             if r.get('alarm_src') and r.get('source') in (None, layer.name)})
+            params = next((p for p in map(_report.scenario_params, texts) if p), None)
+            sid = next((s for s in map(_report.scenario_id, texts) if s), None)
+            if sid is None:
+                m = re.match(r"^risk - .+ - (\S+?)(?: - .*)?$", layer.name)   # municipality mode names
+                sid = m.group(1) if m else None
+            if params is None and sid in self._scenario_names():
+                params = _report.scenario_params(self._scenario_names()[sid])
+            if sid == _data.FLAT_NO_ID:
+                sid = None
+            label = sid or (f"{params['t_high']}-{params['t_low']}" if params else layer.name)
+            if (label, str(params)) not in seen:
+                seen.add((label, str(params)))
+                scenarios.append((label, params))
+        parsed = [_filters.parse_description(_filter_name(layer) or "") for layer in layers]
+        aspects, elev_min, elev_max = _report.problem_from_filters(parsed)
+        return _report.scenario_section(scenarios, aspects, elev_min, elev_max)
+
+    def _scenario_names(self):
+        try:
+            return _config.load_config()['scenarios']
+        except Exception:
+            return dict(_config.DEFAULT_SCENARIOS)
 
     # ------------------------------------------------------------------- reading --
 
@@ -2000,20 +2113,22 @@ class GenerateReport(object):
         missing = [f for f in _report.FIELDS if f not in names]
         if missing:
             raise KeyError(", ".join(missing))
-        present = [f for f in self.MAP_FIELDS if f in names]     # older results may lack some of them
+        wanted = self.MAP_FIELDS + self.LIST_FIELDS
+        present = [f for f in wanted if f in names]     # older results may lack some of them
         fields = [names[f] for f in present] + (["SHAPE@"] if with_shape else [])
         kwargs = {'spatial_reference': arcpy.SpatialReference(4326)} if with_shape else {}
         records = []
         with arcpy.da.SearchCursor(layer, fields, **kwargs) as cursor:
             for row in cursor:
                 record = {name: value for name, value in zip(present, row)}
-                for name in self.MAP_FIELDS:
+                for name in wanted:
                     record.setdefault(name, None)
                 if tag:
                     record['source'] = tag
                 if with_shape and row[-1] is not None:
                     shape = row[-1]
-                    centre = shape.centroid if shape.type != "point" else shape.firstPoint
+                    # a point inside the building (the centroid can lie outside an L-shaped one)
+                    centre = shape.labelPoint if shape.type != "point" else shape.firstPoint
                     record['lon'], record['lat'] = centre.X, centre.Y
                     try:
                         record['geometry'] = shape.__geo_interface__ if shape.type == "polygon" else None
@@ -2022,15 +2137,20 @@ class GenerateReport(object):
                 records.append(record)
         return records
 
-    def _map_payload(self, layers, records):
-        """Buildings plus background (tracks and PRAs near them, municipality boundaries)."""
+    def _map_buildings(self, records):
+        """The buildings with a position, as webmap expects them ('record' links back to the record)."""
         buildings = []
         for r in records:
             if r.get('lon') is None:
                 continue
             props = {k: (round(r[k], 1) if isinstance(r[k], float) else r[k])
                      for k in self.MAP_FIELDS + ['source'] if r.get(k) is not None}
-            buildings.append({'lon': r['lon'], 'lat': r['lat'], 'geometry': r.get('geometry'), 'props': props})
+            buildings.append({'lon': r['lon'], 'lat': r['lat'], 'geometry': r.get('geometry'), 'props': props,
+                              'record': r})
+        return buildings
+
+    def _map_payload(self, layers, buildings, areas):
+        """Buildings plus background (tracks and PRAs near them, municipality boundaries)."""
         tracks_layers, pra_layers, boundary_layers = self._context_layers(layers)
         # tracks / PRA layers chosen in the dialog are drawn as well (each layer once)
         extra_tracks, extra_pras = getattr(self, "_extra_context", ([], []))
@@ -2039,7 +2159,7 @@ class GenerateReport(object):
         tracks = [g for lyr in tracks_layers for g in self._features_near(lyr, layers)]
         pras = [g for lyr in pra_layers for g in self._features_near(lyr, layers)]
         boundaries = [g for lyr in boundary_layers for g in self._all_features(lyr, 20)]
-        return _webmap.build_payload(buildings, tracks=tracks, pras=pras, boundaries=boundaries)
+        return _webmap.build_payload(buildings, tracks=tracks, pras=pras, boundaries=boundaries, areas=areas)
 
     def _context_layers(self, risk_layers):
         """Tracks and PRA layers of the same groups as the risk layers, and municipality boundaries."""
