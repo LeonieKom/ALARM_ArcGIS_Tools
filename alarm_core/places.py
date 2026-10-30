@@ -13,6 +13,8 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from .i18n import tr
+
 ADDRESS_API = "https://ws.geonorge.no/adresser/v1/punktsok"
 PLACE_API = "https://ws.geonorge.no/stedsnavn/v1/punkt"
 ADDRESS_RADIUS_M = 100
@@ -55,13 +57,13 @@ def place_name(lon, lat, fetch=None):
     return ""
 
 
-def address_label(entry):
-    """'Storgata 68C, Tromsø' (or 'near ...' when the address is more than FAR_M away), '' if none."""
+def address_label(entry, lang="en"):
+    """'Storgata 68C, Tromsø' (or 'near ...' / 'ved ...' when more than FAR_M away), '' if none."""
     if not entry or not entry.get('address'):
         return ""
     text = entry['address'] + (f", {entry['poststed']}" if entry.get('poststed') else "")
     dist = entry.get('dist')
-    return f"near {text}" if dist is not None and dist > FAR_M else text
+    return tr(lang)("near", address=text) if dist is not None and dist > FAR_M else text
 
 
 def street_of(entry):
@@ -135,7 +137,7 @@ def place_key(lon, lat):
     return f"{lon:.3f}_{lat:.3f}"
 
 
-def name_areas(areas, cache_file=None, fetch=None):
+def name_areas(areas, cache_file=None, fetch=None, lang="en"):
     """Names of affected areas, as in the workshop tables.
 
     areas: [{'n', 'lon', 'lat', 'poststeds': [...], 'streets': [...]}] (poststeds and streets
@@ -151,7 +153,7 @@ def name_areas(areas, cache_file=None, fetch=None):
         name = found.get(place_key(a['lon'], a['lat'])) or ""
         if not name:
             posts = Counter(p for p in a.get('poststeds', []) if p)
-            name = posts.most_common(1)[0][0] if posts else f"Area {a['n']}"
+            name = posts.most_common(1)[0][0] if posts else tr(lang)("area_n", n=a['n'])
         names[a['n']] = name
     count = Counter(names.values())
     for a in areas:

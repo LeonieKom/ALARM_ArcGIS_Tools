@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Generate Report: **Norwegian** (Norsk) or English report; **PDF** as further format (several formats at once); tracks and PRAs on the maps **near the buildings, everywhere or none** (separately)
 - Generate Report: **scenario and avalanche problem** (aspect rose and elevation triangle as in Varsom, from the layer filter), a **table of the exposed buildings** by pressure with nearest **address** (Kartverket), area, aspect rose and elevation of the release areas (also in the CSV), and **area names** (Kartverket place names) under the small maps and in the tables. Lookups are cached locally and can be switched off
 - Generate Report: tracks and PRA layers chosen together with the risk layers are drawn on the map instead of stopping the tool; other layers are skipped with a note, and the dialog tells before the run
 - Load ALARM Data: **municipality mode**. Choose municipalities instead of forecast regions; the tool finds the regions whose results reach into them, cuts tracks, PRAs and buildings to the municipalities (rasters are loaded whole per region: cutting took about a minute per raster) and merges the regions into one layer per type and scenario (field `alarm_region` names the source region). Buildings in two regions are kept once (highest max PPR). The municipality boundaries are added as their own layer. Cut-outs are cached in the project geodatabase while the result files are unchanged

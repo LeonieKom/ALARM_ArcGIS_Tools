@@ -8,6 +8,8 @@ elevations, the top above a limit, the foot below one, a band between two).
 import math
 from html import escape
 
+from .i18n import aspect as _aspect_label, tr
+
 ASPECTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 RED = "#C62828"
 EMPTY = "#E3E3E3"
@@ -48,8 +50,8 @@ def rose_paths(aspects, size=24):
     return _sectors(aspects, size / 2, size / 2, r, 0.8)
 
 
-def rose_svg(aspects, size=120, labels=True, title=None):
-    """A rose with the given aspects red; with the direction labels around it."""
+def rose_svg(aspects, size=120, labels=True, title=None, lang="en"):
+    """A rose with the given aspects red; with the direction labels (of the language) around it."""
     pad = size * 0.16 if labels else 0
     total = size + 2 * pad
     c = total / 2
@@ -63,23 +65,24 @@ def rose_svg(aspects, size=120, labels=True, title=None):
         for i, name in enumerate(ASPECTS):
             x, y = _point(c, c, r + pad * 0.6, i * 45)
             parts.append(f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size * 0.09:.1f}" fill="#333" '
-                         f'text-anchor="middle" dominant-baseline="central" font-family="Arial">{name}</text>')
+                         f'text-anchor="middle" dominant-baseline="central" font-family="Arial">{_aspect_label(name, lang)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
 
-def elevation_text(elev_min=None, elev_max=None):
-    """'all elevations', 'above 300 m', 'below 900 m' or '300-900 m'."""
+def elevation_text(elev_min=None, elev_max=None, lang="en"):
+    """'all elevations', 'above 300 m', 'below 900 m' or '300-900 m' (Norwegian: 'over 300 moh', ...)."""
+    _ = tr(lang)
     if elev_min is None and elev_max is None:
-        return "all elevations"
+        return _("all_elevations")
     if elev_max is None:
-        return f"above {elev_min:g} m"
+        return _("above", v=f"{elev_min:g}")
     if elev_min is None:
-        return f"below {elev_max:g} m"
-    return f"{elev_min:g}-{elev_max:g} m"
+        return _("below", v=f"{elev_max:g}")
+    return _("between", lo=f"{elev_min:g}", hi=f"{elev_max:g}")
 
 
-def elevation_svg(elev_min=None, elev_max=None, size=120):
+def elevation_svg(elev_min=None, elev_max=None, size=120, lang="en"):
     """The mountain triangle, red where the release areas are (symbolic heights, as in Varsom)."""
     w, h = size, size * 0.9
     pad = 4
@@ -108,7 +111,7 @@ def elevation_svg(elev_min=None, elev_max=None, size=120):
         y1, y2 = top + (base - top) * 0.35, top + (base - top) * 0.7
         red, lines = band(y1, y2), [y1, y2]
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.0f}" height="{h:.0f}" '
-             f'viewBox="0 0 {w:.1f} {h:.1f}" role="img"><title>{escape(elevation_text(elev_min, elev_max))}</title>',
+             f'viewBox="0 0 {w:.1f} {h:.1f}" role="img"><title>{escape(elevation_text(elev_min, elev_max, lang))}</title>',
              f'<path d="{outline}" fill="{EMPTY}" stroke="#888" stroke-width="1"/>',
              f'<path d="{red}" fill="{RED}"/>']
     for y in lines:

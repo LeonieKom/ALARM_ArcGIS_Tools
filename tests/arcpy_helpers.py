@@ -120,6 +120,8 @@ def env_context(tmp_path_factory, aprx):
     def offline(url, params, timeout=20):
         raise OSError("tests are offline")
     mod._places.get_json = offline
+    real_fetch_tile = mod._pdf.fetch_tile
+    mod._pdf.fetch_tile = None                    # PDF maps without background tiles
 
     real = arcpy.mp.ArcGISProject
     raw = real(str(aprx_copy))
@@ -131,3 +133,4 @@ def env_context(tmp_path_factory, aprx):
     finally:
         arcpy.mp.ArcGISProject = real
         mod._places.get_json = real_get_json
+        mod._pdf.fetch_tile = real_fetch_tile

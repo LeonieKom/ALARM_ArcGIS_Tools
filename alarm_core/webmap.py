@@ -11,6 +11,8 @@ import json
 import math
 from html import escape
 
+from .i18n import number as _number, tr
+
 LEAFLET_VERSION = "1.9.4"
 LEAFLET_CSS = f"https://unpkg.com/leaflet@{LEAFLET_VERSION}/dist/leaflet.css"
 LEAFLET_JS = f"https://unpkg.com/leaflet@{LEAFLET_VERSION}/dist/leaflet.js"
@@ -136,9 +138,10 @@ def areas_for(buildings, max_gap_m=500.0):
     return summaries
 
 
-def area_label(area):
-    """'Area 3: Tønsvik' (or 'Area 3' without a name)."""
-    return f"Area {area['n']}: {area['name']}" if area.get('name') else f"Area {area['n']}"
+def area_label(area, lang="en"):
+    """'Area 3: Tønsvik' (or 'Area 3' without a name; Norwegian 'Område 3: ...')."""
+    _ = tr(lang)
+    return _("area_n_name", n=area['n'], name=area['name']) if area.get('name') else _("area_n", n=area['n'])
 
 
 def build_payload(buildings, tracks=None, pras=None, boundaries=None, max_gap_m=500.0, areas=None):
@@ -197,50 +200,65 @@ def head_html():
             '    </style>')
 
 
-def _legend(payload):
-    parts = [f'<span style="background:{c}"></span>{escape(t)}' for c, t in payload['legend']]
+def _legend(payload, lang="en"):
+    _ = tr(lang)
+    parts = [f'<span style="background:{BUILDING_COLOR}"></span>{escape(_("legend_building"))}']
     context = payload.get('context', {})
     if 'tracks' in context:
         parts.append(f'<span class="box" style="background:{STYLE_TRACKS["fillColor"]};'
-                     f'border:1px solid {STYLE_TRACKS["color"]}"></span>Avalanche tracks')
+                     f'border:1px solid {STYLE_TRACKS["color"]}"></span>{escape(_("tracks"))}')
     if 'pras' in context:
-        parts.append('<span class="box" style="border:1px solid #000"></span>PRAs')
+        parts.append(f'<span class="box" style="border:1px solid #000"></span>{escape(_("pras"))}')
     if 'boundaries' in context:
-        parts.append(f'<span class="box" style="border:2px dashed {STYLE_BOUNDARY["color"]}"></span>Municipality')
+        parts.append(f'<span class="box" style="border:2px dashed {STYLE_BOUNDARY["color"]}"></span>'
+                     f'{escape(_("municipality"))}')
     return "".join(parts)
 
 
-def map_section(payload, title="Affected buildings"):
+def area_caption(area, lang="en"):
+    """'12 buildings, max 80.4 kPa' under a small map."""
+    _ = tr(lang)
+    text = _("buildings_n", n=area['buildings'])
+    if area['max_ppr'] is not None:
+        text += ", " + _("max_kpa", v=_number(area['max_ppr'], 1, lang))
+    return text
+
+
+def map_section(payload, title=None, lang="en"):
     """HTML of the map section (overview, priority list of areas, small maps)."""
+    _ = tr(lang)
+    title = title or _("affected_buildings")
     areas = payload['areas']
     if not payload['features']:
-        return f"<h2>{escape(title)}</h2>\n<p>No buildings to show on the map.</p>\n"
+        return f"<h2>{escape(title)}</h2>\n<p>{escape(_('no_buildings_map'))}</p>\n"
     rows = []
     for a in areas:
         classes = ", ".join(f"{escape(str(k))}: {v}" for k, v in a['classes'].items())
-        ppr = "-" if a['max_ppr'] is None else f"{a['max_ppr']:.1f}"
+        ppr = "-" if a['max_ppr'] is None else _number(a['max_ppr'], 1, lang)
         rows.append(f'<tr><td>{a["n"]}</td><td>{escape(a.get("name") or "")}</td><td>{ppr}</td>'
                     f'<td>{a["buildings"]}</td><td>{classes}</td>'
-                    f'<td><button type="button" onclick="alarmZoom({a["n"]})">Zoom</button></td></tr>')
+                    f'<td><button type="button" onclick="alarmZoom({a["n"]})">{escape(_("zoom"))}</button></td></tr>')
     smalls = "".join(
         f'<div class="alarm-small"><div class="m" id="alarm-small-{a["n"]}"></div>'
-        f'<div><strong>{escape(area_label(a))}</strong><br>{a["buildings"]} buildings'
-        f'{"" if a["max_ppr"] is None else ", max " + format(a["max_ppr"], ".1f") + " kPa"}</div></div>'
+        f'<div><strong>{escape(area_label(a, lang))}</strong><br>{escape(area_caption(a, lang))}</div></div>'
         for a in areas[:MAX_SMALL_MAPS])
-    more = (f"<p>{len(areas) - MAX_SMALL_MAPS} further areas are listed above (Zoom).</p>"
+    more = (f"<p>{escape(_('more_areas', n=len(areas) - MAX_SMALL_MAPS))}</p>"
             if len(areas) > MAX_SMALL_MAPS else "")
     styles = _json_for_script({'tracks': STYLE_TRACKS, 'pras': STYLE_PRAS, 'boundaries': STYLE_BOUNDARY})
+    labels = _json_for_script({'tracks': _("tracks"), 'pras': _("pras"), 'boundaries': _("municipality"),
+                               'address': _("popup_address"), 'area': _("popup_area")})
+    headers = "".join(f"<th>{escape(_(k))}</th>" for k in ("area", "name", "highest_ppr", "buildings", "safety_classes"))
     return f"""
     <h2>{escape(title)}</h2>
-    <p class="alarm-legend">{_legend(payload)}</p>
-    <div id="alarm-map"><p style="padding:10px">The map needs internet access (Leaflet and background map).</p></div>
-    <h3>Affected areas (priority: highest max PPR first)</h3>
-    <p>Buildings closer than 500 m to each other form one area. Click a building for its values.</p>
+    <p class="alarm-legend">{_legend(payload, lang)}</p>
+    <div id="alarm-map"><p style="padding:10px">{escape(_("map_needs_internet"))}</p></div>
+    <h3>{escape(_("areas_priority"))}</h3>
+    <p>{escape(_("areas_explained"))}</p>
     <table class="alarm-areas">
-        <tr><th>Area</th><th>Name</th><th>Highest max PPR [kPa]</th><th>Buildings</th><th>Safety classes</th><th></th></tr>
+        <tr>{headers}<th></th></tr>
         {"".join(rows)}
     </table>
-    <h3>Areas in detail</h3>
+    <h3>{escape(_("areas_detail"))}</h3>
     {smalls}
     {more}
     <script type="application/json" id="alarm-data">{_json_for_script(payload)}</script>
@@ -249,6 +267,7 @@ def map_section(payload, title="Affected buildings"):
         if (typeof L === "undefined") {{ return; }}
         var data = JSON.parse(document.getElementById("alarm-data").textContent);
         var styles = {styles};
+        var labels = {labels};
         var kv = "{KARTVERKET_TILES}", osm = "{OSM_TILES}";
         function esc(v) {{
             return String(v).replace(/[&<>"]/g, function (c) {{
@@ -260,7 +279,7 @@ def map_section(payload, title="Affected buildings"):
         }}
         function context(map) {{
             var layers = {{}};
-            [["tracks", "Avalanche tracks"], ["pras", "PRAs"], ["boundaries", "Municipality"]].forEach(function (k) {{
+            [["tracks", labels.tracks], ["pras", labels.pras], ["boundaries", labels.boundaries]].forEach(function (k) {{
                 var collection = data.context[k[0]];
                 if (!collection) {{ return; }}
                 layers[k[1]] = L.geoJSON(collection, {{
@@ -288,11 +307,11 @@ def map_section(payload, title="Affected buildings"):
                 onEachFeature: function (f, layer) {{
                     var p = f.properties, rows = [];
                     ["address", "bld_id", "saf_class", "max_ppr", "mean_ppr", "pra_elev", "pra_aspct", "source"].forEach(function (k) {{
-                        if (p[k] !== undefined && p[k] !== null && p[k] !== "") {{ rows.push("<b>" + k + "</b>: " + esc(p[k])); }}
+                        if (p[k] !== undefined && p[k] !== null && p[k] !== "") {{ rows.push("<b>" + (k === "address" ? labels.address : k) + "</b>: " + esc(p[k])); }}
                     }});
                     if (p.area) {{
                         var a = data.areas[p.area - 1];
-                        rows.push("<b>area</b>: " + p.area + (a && a.name ? " " + esc(a.name) : ""));
+                        rows.push("<b>" + labels.area + "</b>: " + p.area + (a && a.name ? " " + esc(a.name) : ""));
                     }}
                     layer.bindPopup(rows.join("<br>"));
                 }}

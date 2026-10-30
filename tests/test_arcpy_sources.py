@@ -740,6 +740,36 @@ def test_report_has_addresses_area_names_scenario_and_building_table(kommune_env
     assert "Testvegen 1, Testby" in again and "alarm-map" not in again    # table also without the map
 
 
+def test_norwegian_report_as_html_csv_and_pdf_with_all_tracks(env, two_regions, tmp_path, monkeypatch):
+    monkeypatch.setattr(env.mod, "_PLACES_CACHE", tmp_path / "cache")
+    risk = two_regions["risk_RA_A_x"]
+    tool = env.mod.GenerateReport()
+    assert [p.name for p in tool.getParameterInfo()][5:] == ["language", "tracks_on_map", "pras_on_map"]
+    near = env.mod.GenerateReport.BG_NEAR
+    everywhere, none = env.mod.GenerateReport.BG_ALL, env.mod.GenerateReport.BG_NONE
+
+    def run(out, tracks, pras, formats=("HTML",)):
+        out.mkdir()
+        tool.execute([P([risk]), P(str(out)), P(list(formats)), P(True), P(True), P("Norsk"), P(tracks), P(pras)],
+                     None)
+        return out
+
+    out = run(tmp_path / "all", everywhere, none, ("HTML", "CSV", "PDF"))
+    html = next(out.glob("*.html")).read_text(encoding="utf-8")
+    assert "<h1>Risikorapport</h1>" in html and "Eksponerte bygg etter trykk" in html
+    data = _map_data(html)
+    assert len(data['context']['tracks']['features']) == 2           # everywhere: also the far one
+    assert 'pras' not in data['context']                              # none
+    assert "BYGG,bld_id" in next(out.glob("*.csv")).read_text(encoding="utf-8")
+    pdf = next(out.glob("*.pdf")).read_bytes()
+    assert pdf.startswith(b"%PDF") and len(pdf) > 10000
+    near_data = _map_data(next(run(tmp_path / "near", near, near).glob("*.html")).read_text(encoding="utf-8"))
+    assert len(near_data['context']['tracks']['features']) == 1       # only the one within 1 km of the buildings
+    assert len(near_data['context']['pras']['features']) == 1
+    assert env.mod.GenerateReport._formats("HTML;PDF") == {"HTML", "PDF"}
+    assert env.mod.GenerateReport._formats("Both") == {"HTML", "CSV"}  # older saved runs
+
+
 def test_report_offline_is_written_without_addresses(kommune_env, two_region_run, tmp_path, capfd, monkeypatch):
     env = kommune_env
     monkeypatch.setattr(env.mod, "_PLACES_CACHE", tmp_path / "cache")

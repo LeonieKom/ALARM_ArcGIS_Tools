@@ -130,8 +130,10 @@ Generate a detailed statistics report for one or several Risk Assessment layers.
 **Parameters:**
 - **Risk Assessment Layers**: one or several from the current map, e.g. the risk layers of all forecast regions a municipality lies in. Tracks and PRA layers chosen here as well are drawn on the map (layers of the same group are drawn anyway); other layers are not used. The dialog says before the run how each chosen layer is used. They are combined; a building in more than one layer (same `bld_id`) is counted once, with its highest max PPR, and the report says how many there were
 - **Output Directory**: Where to save the report
-- **Report Format**: HTML, CSV, or Both
-- **Include map**: an interactive map in the HTML report (default: yes)
+- **Report Format**: one or several of HTML, CSV and PDF
+- **Include maps**: an interactive map in the HTML report and printed maps in the PDF (default: yes)
+- **Language**: English or Norsk (bokmål; aspects as in Varsom: N, NØ, Ø, ..., elevations in moh, decimal comma). The CSV keeps decimal points so spreadsheets read the numbers
+- **Tracks on the map / PRAs on the map**: *Near the buildings (1 km)* (default), *Everywhere (whole layer)* or *None*. Everywhere draws all features of the layer (its filter applies; at most 20 000, simplified to 10 m), which makes the HTML larger
 - **Look up addresses and area names**: from Kartverket's open APIs (ws.geonorge.no, needs internet; default: yes). The answers are cached in `%LOCALAPPDATA%\ALARM_Tools\kartverket`, so a building or area is only looked up once. Without internet the report is written without addresses
 
 **What it does:**
@@ -149,6 +151,7 @@ Generate a detailed statistics report for one or several Risk Assessment layers.
 - Creates formatted HTML report with tables and percentages; it names the layer, its filter (readable name and SQL) and a selection, if any
 - **Map** (HTML): all buildings of the report on a Kartverket background map (OpenStreetMap as alternative), as bright red points; click a building for its values. As background: the avalanche tracks (very light blue) and PRAs (thin black outline) of the same group(s) as the risk layers, within 1 km of the buildings, and municipality boundaries (`Kommune: ...` layers). Buildings closer than 500 m to each other form an *affected area*: a priority table lists the areas, highest max PPR first, with a *Zoom* button, and the first 12 get their own small map. All maps can be zoomed and moved. Opening the report needs internet access for the map (Leaflet and the background tiles); the tables work without it
 - Optional CSV export for further analysis
+- **PDF** (A4): the same content for printing or sending - scenario with aspect rose and elevation triangle, key figures, an overview map with the area numbers, the priority list of the areas, a small map per area ("Area 1: Name", first 12), the exposed buildings (S2/S3; S1 are counted but not listed) with a small rose per row, and the statistics tables. The maps have the Kartverket background when the tiles can be fetched (internet), else a plain background. Drawn with matplotlib, which comes with ArcGIS Pro
 
 **Example:**
 ```

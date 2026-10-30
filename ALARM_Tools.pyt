@@ -38,12 +38,15 @@ import alarm_core.compare as _compare
 import alarm_core.report as _report
 import alarm_core.kommune as _kommune
 import alarm_core.webmap as _webmap
+import alarm_core.i18n as _i18n
 import alarm_core.symbols as _symbols
 import alarm_core.places as _places
+import alarm_core.pdf_report as _pdf
 
 # ArcGIS Pro keeps imported modules for the whole session. Reloading them here makes
 # "Refresh" of the toolbox pick up edits without restarting Pro.
-for _module in (_config, _data, _dbf, _filters, _kommune, _compare, _symbols, _report, _webmap, _places):
+for _module in (_config, _data, _dbf, _filters, _kommune, _compare, _i18n, _symbols, _report, _webmap, _places,
+                _pdf):
     importlib.reload(_module)
 
 
@@ -1842,6 +1845,12 @@ class GenerateReport(object):
     LIST_FIELDS = ["pra_asplst", "pra_elvls", "alarm_src"]
     # address lookups per report at most (S3 and S2 first, then by max PPR)
     MAX_ADDRESS_LOOKUPS = 2000
+    FORMATS = ["HTML", "CSV", "PDF"]
+    # tracks / PRAs on the maps
+    BG_NEAR = "Near the buildings (1 km)"
+    BG_ALL = "Everywhere (whole layer)"
+    BG_NONE = "None"
+    MAP_GENERALIZE_ALL_M = 10       # simplified more when the whole layer is drawn
 
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
@@ -1871,21 +1880,22 @@ class GenerateReport(object):
             parameterType="Required",
             direction="Input")
 
-        # Parameter 2: Report format
+        # Parameter 2: Report formats (one or several)
         param2 = arcpy.Parameter(
             displayName="Report Format",
             name="report_format",
             datatype="GPString",
             parameterType="Required",
-            direction="Input")
+            direction="Input",
+            multiValue=True)
 
         param2.filter.type = "ValueList"
-        param2.filter.list = ["HTML", "CSV", "Both"]
-        param2.value = "HTML"
+        param2.filter.list = self.FORMATS
+        param2.value = ["HTML"]
 
-        # Parameter 3: interactive map in the HTML report
+        # Parameter 3: maps in the HTML (interactive) and PDF report
         param3 = arcpy.Parameter(
-            displayName="Include map (HTML; needs internet when opened)",
+            displayName="Include maps (HTML needs internet when opened)",
             name="include_map",
             datatype="GPBoolean",
             parameterType="Optional",
@@ -1901,7 +1911,27 @@ class GenerateReport(object):
             direction="Input")
         param4.value = True
 
-        return [param0, param1, param2, param3, param4]
+        # Parameter 5: language of the report
+        param5 = arcpy.Parameter(
+            displayName="Language",
+            name="language",
+            datatype="GPString",
+            parameterType="Optional",
+            direction="Input")
+        param5.filter.type = "ValueList"
+        param5.filter.list = list(_i18n.LANGUAGES)
+        param5.value = "English"
+
+        # Parameters 6, 7: which tracks / PRAs the maps show
+        params = [param0, param1, param2, param3, param4, param5]
+        for name, label in (("tracks_on_map", "Tracks on the map"), ("pras_on_map", "PRAs on the map")):
+            p = arcpy.Parameter(displayName=label, name=name, datatype="GPString", parameterType="Optional",
+                                direction="Input")
+            p.filter.type = "ValueList"
+            p.filter.list = [self.BG_NEAR, self.BG_ALL, self.BG_NONE]
+            p.value = self.BG_NEAR
+            params.append(p)
+        return params
 
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -1949,13 +1979,20 @@ class GenerateReport(object):
         kinds = self._sort_layers(_layers_of(parameters[0]))
         layers = kinds['risk']
         output_dir = parameters[1].valueAsText
-        report_format = parameters[2].valueAsText
-        include_map = bool(parameters[3].value) if len(parameters) > 3 and parameters[3].value is not None else True
-        lookup = bool(parameters[4].value) if len(parameters) > 4 and parameters[4].value is not None else True
+
+        def value(i, default):
+            return parameters[i].value if len(parameters) > i and parameters[i].value is not None else default
+        formats = self._formats(parameters[2].valueAsText)
+        include_map = bool(value(3, True))
+        lookup = bool(value(4, True))
+        lang = _i18n.LANGUAGES.get(value(5, "English"), _i18n.DEFAULT)
+        self._extent = {'tracks': value(6, self.BG_NEAR), 'pras': value(7, self.BG_NEAR)}
         if not layers:
             arcpy.AddError("None of the chosen layers is a Risk Assessment layer.")
             return
-        with_map = include_map and report_format in ["HTML", "Both"]
+        if not formats:
+            arcpy.AddError("Choose a report format (HTML, CSV and/or PDF).")
+            return
         self._extra_context = (kinds['tracks'], kinds['pras'])
 
         entries, records = [], []
@@ -1990,52 +2027,80 @@ class GenerateReport(object):
         if stats['elevation'][_report.UNKNOWN]:
             arcpy.AddWarning(f"{stats['elevation'][_report.UNKNOWN]} buildings have no elevation (listed as Unknown)")
 
-        context = _report.context_for_layers(entries, duplicates)
+        context = _report.context_for_layers(entries, duplicates, lang=lang)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         more = f"_and_{len(layers) - 1}_more" if len(layers) > 1 else ""
         base = re.sub(r"[^0-9A-Za-z_]", "_", f"risk_report_{layers[0].name}{more}_{timestamp}")
 
-        # affected areas, addresses and area names (for the map, the building table and the CSV)
+        # affected areas, addresses and area names (for the maps, the building table and the CSV)
         buildings = self._map_buildings(records)
         areas = _webmap.areas_for(buildings)
         for area in areas:
             for i in area['members']:
                 buildings[i]['record']['area'] = area['n']
         if lookup:
-            self._add_addresses(records)
-            self._name_areas(areas, buildings)
+            self._add_addresses(records, lang)
+            self._name_areas(areas, buildings, lang)
         for b in buildings:
             if b['record'].get('address'):
                 b['props']['address'] = b['record']['address']
         area_names = {a['n']: a['name'] for a in areas if a.get('name')}
         arcpy.AddMessage(f"{len(buildings)} buildings in {len(areas)} affected areas")
 
-        if report_format in ["HTML", "Both"]:
+        problem = self._problem(layers)
+        scenarios = self._scenarios(layers, records, lang)
+        payload = None
+        if include_map and ("HTML" in formats or "PDF" in formats):
+            payload = self._map_payload(layers, buildings, areas)
+            context_info = ", ".join(f"{len(v['features'])} {k}" for k, v in payload['context'].items())
+            if context_info:
+                arcpy.AddMessage(f"Map background: {context_info}")
+
+        if "HTML" in formats:
             html_path = os.path.join(output_dir, base + ".html")
-            scenario_html = self._scenario_html(layers, records)
-            buildings_html = _report.buildings_table(records, area_names, problem=self._problem(layers))
-            if include_map:
-                payload = self._map_payload(layers, buildings, areas)
-                context_info = ", ".join(f"{len(v['features'])} {k}" for k, v in payload['context'].items())
-                if context_info:
-                    arcpy.AddMessage(f"Map background: {context_info}")
-                _report.write_html(html_path, stats, context, map_html=_webmap.map_section(payload),
+            scenario_html = _report.scenario_section(scenarios, *problem, lang=lang)
+            buildings_html = _report.buildings_table(records, area_names, problem=problem, lang=lang)
+            if payload is not None:
+                _report.write_html(html_path, stats, context, map_html=_webmap.map_section(payload, lang=lang),
                                    head_extra=_webmap.head_html(), scenario_html=scenario_html,
-                                   buildings_html=buildings_html)
+                                   buildings_html=buildings_html, lang=lang)
             else:
                 _report.write_html(html_path, stats, context, scenario_html=scenario_html,
-                                   buildings_html=buildings_html)
+                                   buildings_html=buildings_html, lang=lang)
             arcpy.AddMessage(f"HTML report: {html_path}")
-        if report_format in ["CSV", "Both"]:
+        if "CSV" in formats:
             csv_path = os.path.join(output_dir, base + ".csv")
             _report.write_csv(csv_path, stats, context, buildings=records, area_names=area_names,
-                              problem=self._problem(layers))
+                              problem=problem, lang=lang)
             arcpy.AddMessage(f"CSV report: {csv_path}")
+        if "PDF" in formats:
+            pdf_path = os.path.join(output_dir, base + ".pdf")
+            hidden = ("S1",)
+            rows = [r for r in _report.table_rows(records, area_names, problem, lang)
+                    if r['saf_class'] not in hidden]
+            try:
+                pages = _pdf.write_pdf(
+                    pdf_path, context=context, scenarios=_report.scenario_lines(scenarios, lang), problem=problem,
+                    summary=_report.summary_lines(stats, lang), payload=payload, building_rows=rows,
+                    hidden_count=len(records) - len(rows), hidden_classes=hidden,
+                    stats_tables=_report.tables(stats, lang), lang=lang, fetch=_pdf.fetch_tile)
+                arcpy.AddMessage(f"PDF report: {pdf_path} ({pages} pages)")
+            except Exception as e:
+                arcpy.AddError(f"Could not write the PDF report: {e}")
         return
+
+    @staticmethod
+    def _formats(text):
+        """{'HTML', 'CSV', 'PDF'} from the format parameter ('HTML;PDF'; the old 'Both' = HTML and CSV)."""
+        chosen = set()
+        for part in (text or "").replace("'", "").split(";"):
+            part = part.strip()
+            chosen |= {"HTML", "CSV"} if part == "Both" else ({part} if part in GenerateReport.FORMATS else set())
+        return chosen
 
     # ------------------------------------------------- addresses, areas, scenario --
 
-    def _add_addresses(self, records):
+    def _add_addresses(self, records, lang="en"):
         """record['address'] from Kartverket (S3 and S2 first; at most MAX_ADDRESS_LOOKUPS)."""
         order = {"S3": 0, "S2": 1}
         located = [r for r in records if r.get('lon') is not None]
@@ -2054,12 +2119,12 @@ class GenerateReport(object):
         for r in located:
             entry = found.get(key(r))
             if entry:
-                r['address'] = _places.address_label(entry) or None
+                r['address'] = _places.address_label(entry, lang) or None
                 r['_address_entry'] = entry
         if failed:
             arcpy.AddWarning(f"  {failed} address lookups failed (no internet?) - those buildings have no address")
 
-    def _name_areas(self, areas, buildings):
+    def _name_areas(self, areas, buildings, lang="en"):
         """area['name'] from Kartverket's place names (else postal place / street, as in the workshop tables)."""
         if not areas:
             return
@@ -2070,14 +2135,14 @@ class GenerateReport(object):
                           'poststeds': [e['poststed'] for e in entries if e and e.get('poststed')],
                           'streets': [_places.street_of(e) for e in entries if e]})
         arcpy.AddMessage(f"Looking up place names (Kartverket) for {len(areas)} areas ...")
-        names, failed = _places.name_areas(items, _PLACES_CACHE / "places.json")
+        names, failed = _places.name_areas(items, _PLACES_CACHE / "places.json", lang=lang)
         for a in areas:
             a['name'] = names.get(a['n'])
         if failed:
             arcpy.AddWarning(f"  {failed} place name lookups failed (no internet?)")
 
-    def _scenario_html(self, layers, records):
-        """Scenario parameters of the risk layers and the avalanche problem from their filters."""
+    def _scenarios(self, layers, records, lang="en"):
+        """[(label, params or None)]: the scenario(s) of the risk layers."""
         scenarios, seen = [], set()
         for layer in layers:
             texts = [str(getattr(layer, 'dataSource', "") or ""), layer.name]
@@ -2092,13 +2157,13 @@ class GenerateReport(object):
             if params is None and sid in self._scenario_names():
                 params = _report.scenario_params(self._scenario_names()[sid])
             if sid == _data.FLAT_NO_ID or (sid is None and params):
-                label = "single run"
+                label = _i18n.tr(lang)("single_run")
             else:
                 label = sid or layer.name
             if (label, str(params)) not in seen:
                 seen.add((label, str(params)))
                 scenarios.append((label, params))
-        return _report.scenario_section(scenarios, *self._problem(layers))
+        return scenarios
 
     def _problem(self, layers):
         """(aspects, elev_min, elev_max) of the avalanche problem, from the layers' filters."""
@@ -2162,8 +2227,9 @@ class GenerateReport(object):
         extra_tracks, extra_pras = getattr(self, "_extra_context", ([], []))
         tracks_layers = _unique_layers(tracks_layers + list(extra_tracks))
         pra_layers = _unique_layers(pra_layers + list(extra_pras))
-        tracks = [g for lyr in tracks_layers for g in self._features_near(lyr, layers)]
-        pras = [g for lyr in pra_layers for g in self._features_near(lyr, layers)]
+        extent = getattr(self, "_extent", {})
+        tracks = [g for lyr in tracks_layers for g in self._background(lyr, layers, extent.get('tracks'))]
+        pras = [g for lyr in pra_layers for g in self._background(lyr, layers, extent.get('pras'))]
         boundaries = [g for lyr in boundary_layers for g in self._all_features(lyr, 20)]
         return _webmap.build_payload(buildings, tracks=tracks, pras=pras, boundaries=boundaries, areas=areas)
 
@@ -2205,23 +2271,33 @@ class GenerateReport(object):
         except Exception:
             return None
 
-    def _features_near(self, layer, risk_layers):
-        """Features of layer (its filter applies) within MAP_CONTEXT_DISTANCE_M of the buildings."""
+    def _background(self, layer, risk_layers, extent):
+        """Tracks / PRAs of layer for the maps: near the buildings (default), the whole layer, or none."""
+        if extent == self.BG_NONE:
+            return []
+        return self._features_near(layer, risk_layers, everywhere=extent == self.BG_ALL)
+
+    def _features_near(self, layer, risk_layers, everywhere=False):
+        """Features of layer (its filter applies) within MAP_CONTEXT_DISTANCE_M of the buildings,
+        or all of them (everywhere; simplified more)."""
         name = f"alarm_ctx_{uuid.uuid4().hex[:8]}"
         arcpy.management.MakeFeatureLayer(layer, name)
+        tolerance = self.MAP_GENERALIZE_ALL_M if everywhere else self.MAP_GENERALIZE_M
+        where = "in the layer" if everywhere else "near the buildings"
         try:
-            for i, risk in enumerate(risk_layers):
-                arcpy.management.SelectLayerByLocation(
-                    name, "WITHIN_A_DISTANCE", risk, f"{self.MAP_CONTEXT_DISTANCE_M} Meters",
-                    "NEW_SELECTION" if i == 0 else "ADD_TO_SELECTION")
+            if not everywhere:
+                for i, risk in enumerate(risk_layers):
+                    arcpy.management.SelectLayerByLocation(
+                        name, "WITHIN_A_DISTANCE", risk, f"{self.MAP_CONTEXT_DISTANCE_M} Meters",
+                        "NEW_SELECTION" if i == 0 else "ADD_TO_SELECTION")
             out = []
             with arcpy.da.SearchCursor(name, ["SHAPE@"]) as cursor:
                 for (shape,) in cursor:
                     if len(out) >= self.MAP_MAX_CONTEXT_FEATURES:
                         arcpy.AddWarning(f"  {layer.name}: only the first {self.MAP_MAX_CONTEXT_FEATURES} features "
-                                         f"near the buildings are drawn on the map")
+                                         f"{where} are drawn on the map")
                         break
-                    geometry = self._geojson(shape, self.MAP_GENERALIZE_M)
+                    geometry = self._geojson(shape, tolerance)
                     if geometry:
                         out.append({'geometry': geometry})
             return out
